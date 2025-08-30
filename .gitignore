@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+venv/
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+.cache/
+frontend/vet-app/node_modules/
+frontend/vet-app/node_modules/.cache/
+frontend/vet-app/node_modules/.cache/default-development/70.pack
+# Environment
+.env
+*.env
+.env.local
+
+# Mac
+.DS_Store

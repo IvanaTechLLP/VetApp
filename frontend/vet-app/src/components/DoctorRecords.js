@@ -10,14 +10,12 @@ const DoctorRecords = ({ profile }) => {
 
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchDate, setSearchDate] = useState(""); // filters by reminder date (YYYY-MM-DD)
+  const [searchDate, setSearchDate] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [expanded, setExpanded] = useState({});
   const [error, setError] = useState(null);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [isOpen, setIsOpen] = useState(false);
-  // filter by type
-  const [typeFilter, setTypeFilter] = useState(""); // "", "Prescription", "Vaccination", "Blood Work"
+  const [typeFilter, setTypeFilter] = useState("");
 
   const navigate = useNavigate();
 
@@ -33,19 +31,17 @@ const DoctorRecords = ({ profile }) => {
         const res = await axios.get(`http://localhost:8000/doctor_reports/${doctorId}`);
         const serverReports = res.data?.reports ?? [];
 
-      // 🔥 transform each report's links
-      const updatedReports = serverReports.map(report => ({
-        ...report,
-        report_pdf_links: (report.report_pdf_links || []).map(
-          link => `http://localhost:8000${link}`
-        )
-      }));
+        // 🔑 Use secure_doctor_link directly
+        const updatedReports = serverReports.map(report => ({
+          ...report,
+          report_pdf_links: report.report_pdf_links || [],
+          protected_link: report.secure_doctor_link || null
+        }));
 
-      setRecords(updatedReports);
-      console.log(updatedReports);
+        setRecords(updatedReports);
       } catch (err) {
         console.error("Error fetching doctor records:", err);
-        setError(err.response?.data || err.message || "Failed to fetch records");
+        setError(err.response?.data?.detail || err.message || "Failed to fetch records");
       } finally {
         setLoading(false);
       }
@@ -90,13 +86,8 @@ const DoctorRecords = ({ profile }) => {
   }, [records, searchTerm, searchDate, typeFilter]);
 
   if (loading) return <div className="loader">Loading...</div>;
-    const closeMenu = () => {
-    setIsOpen(false);
-  };
-  const toggleMobileMenu = () => {
-    setMenuOpen(prev => !prev);
-    console.log("Menu Toggle");
-  };
+
+  const toggleMobileMenu = () => setMenuOpen(prev => !prev);
 
   return (
     <div className="doctor-dashboard">
@@ -109,13 +100,13 @@ const DoctorRecords = ({ profile }) => {
           <li><a className="current-link">Records</a></li>
         </ul>
       </nav>
-            <nav className="phone-mobile-nav">
+
+      <nav className="phone-mobile-nav">
         <div className="phone-nav-logo">
           <a href="#" className="phone-logo-link">
             <img src="/PT.png" alt="Doctor Dost Logo" className="phone-logo-image" />
           </a>
         </div>
-
         <button className="phone-hamburger" onClick={toggleMobileMenu}>
           {menuOpen ? '×' : '☰'}
         </button>
@@ -123,11 +114,8 @@ const DoctorRecords = ({ profile }) => {
 
       <div className={`phone-mobile-menu ${menuOpen ? 'open' : ''}`}>
         <ul className="home-nav-links">
-             <li onClick={() => { navigate("/doctor");closeMenu();}}><a>Dashboard</a></li>
-          <li>
-            <a className="current-link">Records</a>
-          </li>
-       
+          <li onClick={() => navigate("/doctor")}><a>Dashboard</a></li>
+          <li><a className="current-link">Records</a></li>
         </ul>
       </div>
 
@@ -181,27 +169,9 @@ const DoctorRecords = ({ profile }) => {
                 <p><strong>Pet Name:</strong> {rec.pet_name ?? "N/A"}</p>
                 <p><strong>Owner Phone:</strong> {rec.pet_parent_phone ?? "N/A"}</p>
                 <p><strong>Reminder Date:</strong> {rec.reminder ? String(rec.reminder).slice(0,10) : "N/A"}</p>
+                <p><strong>Secure Link:</strong> {rec.protected_link ? <a href={rec.protected_link} target="_blank" rel="noreferrer">Open</a> : "N/A"}</p>
 
-                <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                  {Array.isArray(rec.report_pdf_links) && rec.report_pdf_links.length > 0 ? (
-                    rec.report_pdf_links.map((url, i) => (
-                      <a key={i} href={url} target="_blank" rel="noreferrer" className="view-link">
-                        View {i + 1}
-                      </a>
-                    ))
-                  ) : (
-                    <span className="muted">No files</span>
-                  )}
-
-                  <button
-                    className="view-more-btn"
-                    onClick={() =>
-                      setExpanded((prev) => ({ ...prev, [idx]: !prev[idx] }))
-                    }
-                  >
-                    {expanded[idx] ? "Hide" : "Expand"}
-                  </button>
-                </div>
+                
               </div>
             ))}
           </div>

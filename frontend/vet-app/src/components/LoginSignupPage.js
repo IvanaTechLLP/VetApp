@@ -64,8 +64,9 @@ axios
     cached_user_data.user_id = doctorId;
     cached_user_data.user_type = userType;
     localStorage.setItem("user", JSON.stringify(cached_user_data));
-    console.log("jwt", payload.data.token );
-    localStorage.setItem("jwt", payload.data.token);  // ✅ Save JWT here
+    console.log("jwt", payload.access_token);
+localStorage.setItem("jwt", payload.access_token);
+  // ✅ Save JWT here
 
 
     navigate("/doctor");

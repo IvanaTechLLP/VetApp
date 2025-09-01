@@ -12,7 +12,8 @@ const DoctorDashboard = ({ profile }) => {
   const [selectedOption, setSelectedOption] = useState("upload");
   const [reminderValue, setReminderValue] = useState("");
   const [customReminderNumber, setCustomReminderNumber] = useState("");
-
+  const token = localStorage.getItem("jwt");
+console.log(token);
   const [petName, setPetName] = useState("");
   const [whatsappAccessToken, setWhatsappAccessToken] = useState("");
   const[whatsappNumberId, setWhatsappNumberId] = useState("");
@@ -337,7 +338,10 @@ const savePrescriptionAndSend = async (e) => {
     const res = await axios.post(
       "http://localhost:8000/doctor_upload_file",
       formData,
-      { headers: { "Content-Type": "multipart/form-data" } }
+      { headers: { 
+        "Content-Type": "multipart/form-data",
+        Authorization: `Bearer ${token}`  
+      } }
     );
     console.log("✅ Response from backend:", res.data);
     alert("Prescription uploaded successfully!");
@@ -548,13 +552,27 @@ const savePrescriptionAndSend = async (e) => {
       formData.append("reminder", reminderToSend);
 
       try {
-        const res = await axios.post("http://localhost:8000/doctor_upload_file", formData);
-        alert("Report uploaded successfully!");
-        console.log(res.data);
-      } catch (err) {
-        alert("Error uploading file");
-        console.error(err);
-      }
+  const token = localStorage.getItem("jwt"); // or however you're storing it
+
+  const res = await axios.post(
+    "http://localhost:8000/doctor_upload_file",
+    formData,
+    {
+      headers: {
+        "Content-Type": "multipart/form-data",
+        Authorization: `Bearer ${token}`,   // 👈 add token here
+      },
+    }
+  );
+
+  alert("Report uploaded successfully!");
+  console.log(res.data);
+
+} catch (err) {
+  alert("Error uploading file");
+  console.error(err);
+}
+
     }}
   >
 

@@ -17,6 +17,8 @@ frontend/vet-app/node_modules/.cache/default-development/70.pack
 *.env
 .env.local
 
+**/uploads/
+
 # Mac
 .DS_Store
 frontend/credentials.json

@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, Form, Query, UploadFile, HTTPException, Request, Depends
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi import Form
@@ -23,15 +23,18 @@ import json
 import requests
 import logging
 
+from urllib.parse import quote
+from pathlib import Path
+
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timedelta, time as dtime
 import pytz
-
+from fastapi import Depends
+from jose import jwt, JWTError
+from fastapi.security import OAuth2PasswordBearer
 
 import uvicorn
-
-
 
 load_dotenv()
 
@@ -408,13 +411,23 @@ async def admin_login(data: AdminLoginModel):
         )
 
 
+SECRET_KEY = os.getenv("SECRET_KEY", "supersecretkey123")  # 🔑 keep secret in .env
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 24 * 60  # 24 hours
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + (expires_delta or timedelta(minutes=15))
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+
 
 class GoogleLoginModel(BaseModel):
    email: EmailStr
    name: str = None
    clinic_name: str = None
-
-
 
 @app.post("/doctor_login")
 async def doctor_login(data: GoogleLoginModel):
@@ -435,7 +448,7 @@ async def doctor_login(data: GoogleLoginModel):
                     detail={"status": False, "message": "You are not authorized to log in. Please contact admin."},
                 )
 
-            # ✅ Step 2: Check if doctor already exists in Doctor table
+            # ✅ Step 2: Check if doctor already exists
             result = conn.execute(
                 text("SELECT * FROM Doctor WHERE doctor_email = :email"),
                 {"email": data.email}
@@ -443,10 +456,18 @@ async def doctor_login(data: GoogleLoginModel):
 
             if result:
                 print("Doctor exists in DB:", result["doctor_id"], result["doctor_email"])
-                # Doctor exists → log in
+
+                # 🔑 Create JWT
+                access_token = create_access_token(
+                    data={"sub": str(result["doctor_id"]), "email": result["doctor_email"], "role": "doctor"},
+                    expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+                )
+
                 return {
                     "status": True,
                     "message": "Login Successful",
+                    "access_token": access_token,
+                    "token_type": "bearer",
                     "data": {
                         "doctor_id": result["doctor_id"],
                         "email": result["doctor_email"],
@@ -457,7 +478,7 @@ async def doctor_login(data: GoogleLoginModel):
 
             else:
                 print("Doctor not found, registering new doctor:", data.email)
-                # Doctor does not exist → insert with optional fields
+
                 insert_result = conn.execute(
                     text("""
                         INSERT INTO Doctor (doctor_email, doctor_name, clinic_name)
@@ -468,9 +489,18 @@ async def doctor_login(data: GoogleLoginModel):
                 ).mappings().fetchone()
 
                 print("✅ New doctor registered with ID:", insert_result["doctor_id"])
+
+                # 🔑 Create JWT for new doctor
+                access_token = create_access_token(
+                    data={"sub": str(insert_result["doctor_id"]), "email": insert_result["doctor_email"], "role": "doctor"},
+                    expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+                )
+
                 return {
                     "status": True,
                     "message": "Registration Successful",
+                    "access_token": access_token,
+                    "token_type": "bearer",
                     "data": {
                         "doctor_id": insert_result["doctor_id"],
                         "email": insert_result["doctor_email"],
@@ -480,14 +510,13 @@ async def doctor_login(data: GoogleLoginModel):
                 }
 
     except HTTPException as e:
-        raise e  # Pass along explicit HTTP errors like "not authorized"
+        raise e
     except Exception as e:
         print("Error during doctor login:", str(e))
         raise HTTPException(
             status_code=500,
             detail={"status": False, "message": f"Failed to process request: {str(e)}"},
         )
-
 
 
 
@@ -640,7 +669,7 @@ async def get_doctor_profile(email: str):
 UPLOAD_ROOT = "uploads"
 REPORTS_UPLOAD_DIR = os.path.join(UPLOAD_ROOT, "reports")
 os.makedirs(REPORTS_UPLOAD_DIR, exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=UPLOAD_ROOT), name="uploads")
+
 
 
 
@@ -788,7 +817,32 @@ send_whatsapp_template(
 )
 """
 
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
+security = HTTPBearer()
+
+@app.post("/doctor_upload")
+async def doctor_upload_file(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    access_token = credentials.credentials  # This is the token sent from frontend
+    print("📥 Received Access Token:", access_token)
+    
+    # For now just return it back to confirm
+    return {"received_token": access_token}
+
+def get_current_doctor(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    print(token)
+    try:
+        print("inside try")
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        print("payload")
+        return {
+            "doctor_id": payload.get("sub"),
+            "email": payload.get("email"),
+            "role": payload.get("role"),
+        }
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
 @app.post("/doctor_upload_file")
@@ -800,8 +854,12 @@ async def doctor_upload_file(
    pet_name: str = Form(...),
    reminder: Optional[str] = Form(None),
    report_type: Optional[str] = Form(None),
+   current_doctor: dict = Depends(get_current_doctor),
 ):
    print("📥 Received doctor_upload_file request")
+   if str(current_doctor["doctor_id"]) != str(user_id):
+    raise HTTPException(status_code=403, detail="Unauthorized to upload for this user")
+
 
 
    # --- Normalize phone ---
@@ -838,9 +896,8 @@ async def doctor_upload_file(
            with open(save_path, "wb") as f:
                f.write(content)
       
-           public_url = f"/uploads/reports/{doctor_id}/{unique_name}"  # internal link
-           saved_file_urls.append(public_url)
-
+           stored_path = f"{doctor_id}/{unique_name}"  # internal link
+           saved_file_urls.append(stored_path)
 
        # --- Reminder processing ---
        reminder_date: Optional[date] = None
@@ -857,7 +914,6 @@ async def doctor_upload_file(
 
 
        final_report_type = normalize_report_type(report_type)
-
 
        with engine.begin() as conn:
 # --- Insert report ---
@@ -1029,41 +1085,40 @@ async def doctor_upload_file(
 
 
 
-def print_all_tables():
-   """Prints all tables in the public schema and their rows in a structured way."""
-   with engine.connect() as conn:
-       # Fetch all table names in the public schema
-       result = conn.execute(
-           text("SELECT table_name FROM information_schema.tables WHERE table_schema='public';")
-       )
-       tables = [row[0] for row in result]
-
-
-       print("\n=== Printing all tables in 'public' schema ===\n")
-
-
-       for table in tables:
-           print(f"--- Table: {table} ---")
-           try:
-               rows = conn.execute(text(f"SELECT * FROM {table};")).fetchall()
-               if rows:
-                   for row in rows:
-                       # row._mapping converts SQLAlchemy row to dict for readable print
-                       print(dict(row._mapping))
-               else:
-                   print("   (empty)")
-           except Exception as e:
-               print(f"❌ Error reading table '{table}': {e}")
-
-
-       print("\n=== End of tables ===\n")
+def print_all_table():
+    """Prints all rows from the Reports table in a structured way."""
+    with engine.connect() as conn:
+        print("\n=== Printing Reports table ===\n")
+        try:
+            rows = conn.execute(text("SELECT * FROM Reports;")).fetchall()
+            if rows:
+                for row in rows:
+                    print(dict(row._mapping))  # convert Row to dict
+            else:
+                print("   (empty)")
+        except Exception as e:
+            print(f"❌ Error reading Reports table: {e}")
+        print("\n=== End of Reports table ===\n")
 
 
 
 
 
 
-print_all_tables()
+
+print_all_table()
+
+from itsdangerous import URLSafeTimedSerializer
+
+# --- Signer for secure doctor links ---
+SECRET_KEY = "your_super_secret_key_here"  # use env var in production
+SIGNER = URLSafeTimedSerializer(SECRET_KEY)
+TOKEN_EXPIRY_SEC = 3600  # 1 hour validity
+
+
+def generate_doctor_link(report_id: int) -> str:
+    token = SIGNER.dumps(report_id)
+    return f"https://f094a8fc8690.ngrok-free.app/view_report/{report_id}?token={token}"
 
 
 @app.get("/doctor_reports/{doctor_id}")
@@ -1075,373 +1130,314 @@ async def get_doctor_reports(
    start_date: str | None = Query(None, description="YYYY-MM-DD"),
    end_date: str | None = Query(None, description="YYYY-MM-DD"),
 ):
-   try:
-       offset = (page - 1) * limit
+    try:
+        offset = (page - 1) * limit
+        base_sql = """
+            SELECT report_id, doctor_id, pet_name, pet_parent_phone,
+                   reminder, report_pdf_link, report_type, created_at
+            FROM Reports
+            WHERE doctor_id = :doctor_id
+        """
+        params = {"doctor_id": doctor_id}
 
+        # --- Apply date filters ---
+        if start_date:
+            try:
+                date.fromisoformat(start_date)
+            except Exception:
+                raise HTTPException(status_code=400, detail="start_date must be YYYY-MM-DD")
+            base_sql += " AND DATE(reminder) >= :start_date"
+            params["start_date"] = start_date
 
-       base_sql = """
-           SELECT report_id, doctor_id, pet_name, pet_parent_phone,
-                  reminder, report_pdf_link, report_type, created_at
-           FROM Reports
-           WHERE doctor_id = :doctor_id
-       """
-       params = {"doctor_id": doctor_id}
+        if end_date:
+            try:
+                date.fromisoformat(end_date)
+            except Exception:
+                raise HTTPException(status_code=400, detail="end_date must be YYYY-MM-DD")
+            base_sql += " AND DATE(reminder) <= :end_date"
+            params["end_date"] = end_date
 
+        # --- Search filters ---
+        if search:
+            base_sql += " AND (LOWER(COALESCE(pet_name,'')) LIKE :search OR COALESCE(pet_parent_phone,'') LIKE :search_raw)"
+            params["search"] = f"%{search.lower()}%"
+            params["search_raw"] = f"%{search}%"
 
-       # Date filters
-       if start_date:
-           try:
-               date.fromisoformat(start_date)
-           except Exception:
-               raise HTTPException(status_code=400, detail="start_date must be YYYY-MM-DD")
-           base_sql += " AND DATE(reminder) >= :start_date"
-           params["start_date"] = start_date
+        # --- Pagination & ordering ---
+        base_sql += " ORDER BY created_at DESC NULLS LAST, report_id DESC LIMIT :limit OFFSET :offset"
+        params["limit"] = limit
+        params["offset"] = offset
 
+        with engine.begin() as conn:
+            rows = conn.execute(text(base_sql), params).mappings().all()
 
-       if end_date:
-           try:
-               date.fromisoformat(end_date)
-           except Exception:
-               raise HTTPException(status_code=400, detail="end_date must be YYYY-MM-DD")
-           base_sql += " AND DATE(reminder) <= :end_date"
-           params["end_date"] = end_date
+        reports = []
+        for r in rows:
+            rec = dict(r)
 
+            # Parse stored report links
+            links = []
+            raw = rec.get("report_pdf_link")
+            if raw:
+                try:
+                    parsed = json.loads(raw)
+                    links = parsed if isinstance(parsed, list) else [parsed]
+                except Exception:
+                    links = [raw]
 
-       # Search filters
-       if search:
-           base_sql += " AND (LOWER(COALESCE(pet_name,'')) LIKE :search OR COALESCE(pet_parent_phone,'') LIKE :search_raw)"
-           params["search"] = f"%{search.lower()}%"
-           params["search_raw"] = f"%{search}%"
+            # Reminder
+            rem = rec.get("reminder")
+            reminder_iso = rem.isoformat() if isinstance(rem, (date, datetime)) else str(rem) if rem else None
 
+            # created_at
+            created = rec.get("created_at")
+            created_iso = created.isoformat() if isinstance(created, (date, datetime)) else str(created) if created else None
 
-       # Ordering + pagination
-       base_sql += " ORDER BY created_at DESC NULLS LAST, report_id DESC LIMIT :limit OFFSET :offset"
-       params["limit"] = limit
-       params["offset"] = offset
+            # --- Secure doctor link ---
+            secure_link = generate_doctor_link(rec["report_id"])
 
+            reports.append({
+                "report_id": rec.get("report_id"),
+                "doctor_id": rec.get("doctor_id"),
+                "pet_name": rec.get("pet_name"),
+                "pet_parent_phone": rec.get("pet_parent_phone"),
+                "reminder": reminder_iso,
+                "report_pdf_links": links,
+                "report_type": rec.get("report_type") or "Unknown",
+                "created_at": created_iso,
+                "secure_doctor_link": secure_link  # 🔑 secure, signed URL
+            })
 
-       with engine.begin() as conn:
-           rows = conn.execute(text(base_sql), params).mappings().all()
+        return JSONResponse({
+            "status": True,
+            "reports": reports,
+            "page": page,
+            "limit": limit,
+            "count": len(reports)
+        })
 
-
-       reports = []
-       for r in rows:
-           rec = dict(r)
-
-
-           # parse report_pdf_link
-           links = []
-           raw = rec.get("report_pdf_link")
-           if raw:
-               if isinstance(raw, (list, tuple)):
-                   links = list(raw)
-               elif isinstance(raw, str):
-                   try:
-                       parsed = json.loads(raw)
-                       if isinstance(parsed, list):
-                           links = parsed
-                       elif isinstance(parsed, str):
-                           links = [parsed]
-                       else:
-                           links = []
-                   except Exception:
-                       links = [raw]
-
-
-           # reminder
-           rem = rec.get("reminder")
-           if isinstance(rem, (date, datetime)):
-               reminder_iso = rem.isoformat()
-           else:
-               reminder_iso = str(rem) if rem else None
-
-
-           # created_at
-           created = rec.get("created_at")
-           if isinstance(created, (date, datetime)):
-               created_iso = created.isoformat()
-           else:
-               created_iso = str(created) if created else None
-
-           # doctor bypass link (no password needed)
-           protected_link = f"https://f094a8fc8690.ngrok-free.app/view_report/{rec['report_id']}?vet=true"
-
-           reports.append({
-               "report_id": rec.get("report_id"),
-               "doctor_id": rec.get("doctor_id"),
-               "pet_name": rec.get("pet_name"),
-               "pet_parent_phone": rec.get("pet_parent_phone"),
-               "reminder": reminder_iso,
-               "report_pdf_links": links,   # raw file(s)
-               "report_type": rec.get("report_type") or "Unknown",
-               "created_at": created_iso,
-               "protected_link": protected_link  # 🔑 bypass password for doctor
-           })
-
-
-       return JSONResponse({
-           "status": True,
-           "reports": reports,
-           "page": page,
-           "limit": limit,
-           "count": len(reports)
-       })
-
-
-   except HTTPException:
-       raise
-   except Exception as e:
-       print("ERROR in get_doctor_reports:", str(e))
-       raise HTTPException(status_code=500, detail=f"Failed to fetch reports: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("ERROR in get_doctor_reports:", str(e))
+        raise HTTPException(status_code=500, detail=f"Failed to fetch reports: {str(e)}")
 
 
 
 
-@app.get("/view_report/{report_id}", response_class=HTMLResponse)
-async def view_report_form(report_id: int):
-   html_content = f"""
-   <html>
-   <head>
-       <title>View Report</title>
-       <style>
-           body {{
-               font-family: Arial, sans-serif;
-               background-color: #f7f7f7;
-               display: flex;
-               justify-content: center;
-               align-items: center;
-               min-height: 100vh;
-               margin: 0;
-           }}
-           .container {{
-               background-color: #fff;
-               padding: 30px;
-               border-radius: 10px;
-               box-shadow: 0 4px 10px rgba(0,0,0,0.1);
-               width: 90%;
-               max-width: 500px;
-               text-align: center;
-           }}
-           input[type="password"] {{
-               padding: 10px;
-               width: 80%;
-               margin-bottom: 20px;
-               border-radius: 5px;
-               border: 1px solid #ccc;
-               font-size: 16px;
-           }}
-           button {{
-               padding: 10px 20px;
-               background-color: #007bff;
-               color: #fff;
-               border: none;
-               border-radius: 5px;
-               cursor: pointer;
-               font-size: 16px;
-           }}
-           button:hover {{
-               background-color: #0056b3;
-           }}
-           h2 {{
-               color: #333;
-           }}
-       </style>
-   </head>
-   <body>
-       <div class="container">
-           <h2>Enter last 4 digits of your phone to view the report</h2>
-           <form action="/view_report/{report_id}" method="post">
-               <input type="password" name="password" maxlength="4" required>
-               <br>
-               <button type="submit">View Report</button>
-           </form>
-       </div>
-   </body>
-   </html>
-   """
-   return HTMLResponse(content=html_content)
+UPLOAD_ROOT = "uploads"
+REPORTS_UPLOAD_DIR = os.path.join(UPLOAD_ROOT, "reports")
+os.makedirs(REPORTS_UPLOAD_DIR, exist_ok=True)
 
 
-
-
-# Simulated vet check (replace with your actual vet auth/session logic)
+# Simulated vet check (replace with your actual auth/session logic)
 def current_user_is_vet(vet: bool = False):
-   return vet  # Replace with your real auth
+    return vet  # Replace with real auth/session check
 
 
+# GET: Show password page
 @app.get("/view_report/{report_id}", response_class=HTMLResponse)
 async def view_report_form(report_id: int, vet: bool = False):
-   if current_user_is_vet(vet):
-       return await view_report_submit(report_id, password=None, vet=True)
+    if current_user_is_vet(vet):
+        return await view_report_submit(report_id, password=None, vet=True)
 
+    html_content = f"""
+    <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <style>
+          body {{ font-family: system-ui; background: #0b1320; color: #e9eef6; margin:0; padding:48px 16px; display:grid; place-items:center; }}
+          .card {{ width: min(1000px, 96vw); background:#121a2b; border:1px solid #22314f; border-radius:14px; padding:24px; box-shadow:0 8px 24px rgba(0,0,0,.35); }}
+          input[type=password] {{ background:#0f1625; color:#e9eef6; border:1px solid #314469; padding:10px 12px; border-radius:10px; width:160px; font-size:16px; }}
+          button {{ background:#3b82f6; color:white; border:none; border-radius:10px; padding:10px 16px; cursor:pointer; }}
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <h2>Enter last 4 digits of your phone to view the report</h2>
+          <form action="/view_report/{report_id}" method="post">
+            <input type="password" name="password" maxlength="4" required />
+            <button type="submit">View Report</button>
+          </form>
+        </div>
+      </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
-   html_content = f"""
-   <html>
-     <head>
-       <meta name="viewport" content="width=device-width, initial-scale=1" />
-       <style>
-         :root {{
-           --maxWidth: min(1000px, 96vw);
-           --viewerHeight: clamp(70vh, 85vh, 92vh);
-         }}
-         body {{
-           font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-           background: #0b1320;
-           color: #e9eef6;
-           margin: 0;
-           padding: 48px 16px;
-           display: grid;
-           place-items: start center;
-           gap: 16px;
-         }}
-         .card {{
-           width: var(--maxWidth);
-           background: #121a2b;
-           border: 1px solid #22314f;
-           border-radius: 14px;
-           box-shadow: 0 8px 24px rgba(0,0,0,.35);
-           padding: 24px;
-         }}
-         h2 {{ margin: 0 0 16px; font-weight: 600; }}
-         form {{
-           display: flex; gap: 12px; justify-content: center; margin-top: 8px;
-         }}
-         input[type=password] {{
-           background: #0f1625; color: #e9eef6; border: 1px solid #314469;
-           padding: 10px 12px; border-radius: 10px; font-size: 16px; width: 160px;
-         }}
-         button {{
-           background: #3b82f6; color: white; border: none; border-radius: 10px;
-           padding: 10px 16px; font-size: 16px; cursor: pointer;
-         }}
-         button:hover {{ filter: brightness(1.05); }}
-       </style>
-     </head>
-     <body>
-       <div class="card">
-         <h2>Enter last 4 digits of your phone to view the report</h2>
-         <form action="/view_report/{report_id}" method="post">
-           <input type="password" name="password" maxlength="4" required />
-           <button type="submit">View Report</button>
-         </form>
-       </div>
-     </body>
-   </html>
-   """
-   return HTMLResponse(content=html_content)
-
-
-
-
+# POST: Verify password & show report
 @app.post("/view_report/{report_id}", response_class=HTMLResponse)
 async def view_report_submit(report_id: int, password: str = Form(None), vet: bool = False):
-   with engine.begin() as conn:
-       row = conn.execute(
-           text("SELECT report_pdf_link, share_password FROM Reports WHERE report_id = :rid"),
-           {"rid": report_id}
-       ).mappings().fetchone()
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT report_pdf_link, share_password FROM Reports WHERE report_id = :rid"),
+            {"rid": report_id}
+        ).mappings().fetchone()
+
+    if not row:
+        return HTMLResponse("<h3>Report not found.</h3>")
+
+    if not current_user_is_vet(vet) and password != row["share_password"]:
+        return HTMLResponse(f"""
+            <html><body style="font-family: Arial; padding: 32px; text-align:center;">
+              <h3>Incorrect password. Try again.</h3>
+              <a href="/view_report/{report_id}">Go back</a>
+            </body></html>
+        """)
+
+    links = json.loads(row["report_pdf_link"] or "[]")
+    html = """
+    <html>
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <style>
+          :root {
+            --maxWidth: min(1100px,96vw);
+            --viewerHeight: 80vh;
+            --cardBg: #f5f5f5; /* light neutral background for tiles */
+            --textColor: #0b1320;
+          }
+
+          body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #e9eef6;
+            color: var(--textColor);
+            margin:0; padding:24px 12px 48px;
+            display:flex; flex-direction:column; align-items:center; gap:20px;
+          }
+
+          h2 {
+            font-size: 2rem;
+            text-align: center;
+            margin-bottom:16px;
+            color: #0b1320;
+          }
+
+          .wrap {
+            width: var(--maxWidth);
+            display:grid;
+            gap:24px;
+          }
+
+          .tile {
+            background: var(--cardBg);
+            border:1px solid #d1d5db;
+            border-radius:12px;
+            padding:16px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            display:flex;
+            flex-direction:column;
+            align-items:center;
+            justify-content:center;
+          }
+
+          /* PDF styling */
+          .pdfFrame {
+            width: 100%;
+            height: 80vh;
+            border: none;
+            border-radius: 8px;
+          }
+
+          /* Image styling */
+          .imgEl {
+            width: 100%;
+            max-height: 80vh;
+            object-fit: contain;
+            border-radius: 8px;
+          }
+
+          .meta {
+            display:flex;
+            gap:12px;
+            align-items:center;
+            margin-top:12px;
+          }
+
+          .btn {
+            display:inline-block;
+            padding:8px 16px;
+            border-radius:8px;
+            text-decoration:none;
+            font-weight:500;
+            background:#3b82f6;
+            color:white;
+            border:1px solid #3b82f6;
+            transition: all 0.2s ease;
+          }
+
+          .btn:hover {
+            background:#2563eb;
+            border-color:#2563eb;
+          }
+
+          @media(max-width:768px) {
+            :root { --viewerHeight: 50vh; }
+            h2 { font-size: 1.6rem; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="wrap">
+          <h2>Your Report(s)</h2>
+    """
+
+    # Serve files via /report_file/{file_name}
+    for i, file_name in enumerate(links, start=1):
+        secure_url = f"/report_file/{file_name}?password={password}"
+
+        if file_name.lower().endswith(".pdf"):
+            html += f"""
+            <div class="tile">
+              <iframe class="pdfFrame" src="{secure_url}" allowfullscreen></iframe>
+              <div class="meta">
+                <a class="btn" href="{secure_url}" target="_blank" rel="noopener">Open in new tab</a>
+                <a class="btn" href="{secure_url}" download>Download PDF</a>
+              </div>
+            </div>
+            """
+        else:
+            html += f"""
+            <div class="tile">
+              <img class="imgEl" src="{secure_url}" alt="Report image {i}" />
+              <div class="meta">
+                <a class="btn" href="{secure_url}" target="_blank" rel="noopener">Open full size</a>
+                <a class="btn" href="{secure_url}" download>Download Image</a>
+              </div>
+            </div>
+            """
+
+    html += "</div></body></html>"
+    return HTMLResponse(html)
 
 
-   if not row:
-       return HTMLResponse("<h3>Report not found.</h3>")
+# Serve actual report files
+@app.get("/report_file/{file_name:path}")
+async def serve_report_file(file_name: str, password: str = None):
+    # Extract report_id from the first folder in the path
+    report_id_part = int(file_name.split("/")[0])
+
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT report_pdf_link, share_password FROM Reports WHERE report_id = :rid"),
+            {"rid": report_id_part}
+        ).mappings().fetchone()
+
+    if not row:
+        return HTMLResponse("<h3>File not found.</h3>")
+
+    if password != row["share_password"]:
+        return HTMLResponse("<h3>Unauthorized access.</h3>")
+
+    file_path = Path(REPORTS_UPLOAD_DIR) / file_name
+    if not file_path.exists():
+        return HTMLResponse(f"<h3>File not found on server: {file_path}</h3>")
+
+    return FileResponse(file_path)
 
 
-   if not current_user_is_vet(vet) and password != row["share_password"]:
-       return HTMLResponse(f"""
-           <html><body style="font-family: Arial; padding: 32px; text-align:center;">
-             <h3>Incorrect password. Try again.</h3>
-             <a href="/view_report/{report_id}">Go back</a>
-           </body></html>
-       """)
 
 
-   links = json.loads(row["report_pdf_link"] or "[]")
-
-
-   # Helper: add viewer hints to PDFs so they fit width and hide toolbar (where supported)
-   def pdf_view_url(u: str) -> str:
-       frag = "#toolbar=0&navpanes=0&scrollbar=0&zoom=page-width"
-       return u + (frag if "#" not in u else "&zoom=page-width")
-
-
-   html = """
-   <html>
-     <head>
-       <meta name="viewport" content="width=device-width, initial-scale=1" />
-       <style>
-         :root {
-           --maxWidth: min(1100px, 96vw);
-           --viewerHeight: clamp(70vh, 85vh, 92vh);
-         }
-         body {
-           font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
-           background: #0b1320;
-           color: #e9eef6;
-           margin: 0;
-           padding: 24px 12px 48px;
-           display: grid;
-           place-items: start center;
-           gap: 20px;
-         }
-         .wrap { width: var(--maxWidth); display: grid; gap: 20px; }
-         .head { display:flex; align-items:center; justify-content:space-between; }
-         .tile {
-           background:#0f1625; border:1px solid #22314f; border-radius:14px;
-           box-shadow: 0 8px 24px rgba(0,0,0,.35); padding:16px;
-         }
-         .pdfFrame, .imgEl {
-           width: 100%; height: var(--viewerHeight); border: none; border-radius: 12px;
-           background: #0a0f1c;
-         }
-         .imgEl { height: auto; max-height: var(--viewerHeight); object-fit: contain; }
-         .meta { display:flex; gap:12px; align-items:center; margin-top:12px; }
-         .btn {
-           display:inline-block; padding:8px 12px; border-radius:10px; text-decoration:none;
-           background:#22314f; color:#cfe1ff; border:1px solid #314469;
-         }
-         .btn:hover { filter: brightness(1.08); }
-       </style>
-     </head>
-     <body>
-       <div class="wrap">
-         <div class="head">
-           <h2 style="margin:0;">Your Report(s)</h2>
-         </div>
-   """
-
-
-   for i, link in enumerate(links, start=1):
-       if link.lower().endswith(".pdf"):
-           view_url = pdf_view_url(link)
-           html += f"""
-             <div class="tile">
-               <iframe class="pdfFrame" src="{view_url}" allow="fullscreen"></iframe>
-               <div class="meta">
-                 <a class="btn" href="{link}" target="_blank" rel="noopener">Open in new tab</a>
-                 <a class="btn" href="{link}" download>Download PDF</a>
-               </div>
-             </div>
-           """
-       else:
-           html += f"""
-             <div class="tile">
-               <img class="imgEl" src="{link}" alt="Report image {i}" />
-               <div class="meta">
-                 <a class="btn" href="{link}" target="_blank" rel="noopener">Open full size</a>
-                 <a class="btn" href="{link}" download>Download Image</a>
-               </div>
-             </div>
-           """
-
-
-   html += """
-       </div>
-     </body>
-   </html>
-   """
-
-
-   return HTMLResponse(html)
 
 
 @app.get("/reminders_today")

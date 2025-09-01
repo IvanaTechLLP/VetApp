@@ -308,7 +308,7 @@ class AdminLoginModel(BaseModel):
     email: EmailStr
     name: str = None
 
-@app.post("/admin_login")
+@app.post("/api/admin_login")
 async def admin_login(data: AdminLoginModel):
     print("Received admin login request for email:", data.email)
     try:
@@ -387,7 +387,7 @@ class GoogleLoginModel(BaseModel):
    name: str = None
    clinic_name: str = None
 
-@app.post("/doctor_login")
+@app.post("/api/doctor_login")
 async def doctor_login(data: GoogleLoginModel):
     print("Received login request for email:", data.email)
     try:
@@ -515,7 +515,7 @@ def normalize_indian_phone(phone: str) -> str | None:
    return None
 
 
-@app.post("/doctor_update")
+@app.post("/api/doctor_update")
 async def doctor_update(data: DoctorUpdateModel):
    try:
        # Basic validation
@@ -615,7 +615,7 @@ async def doctor_update(data: DoctorUpdateModel):
 
 
 
-@app.get("/doctor_profile")
+@app.get("/api/doctor_profile")
 async def get_doctor_profile(email: str):
    with engine.begin() as conn:
        row = conn.execute(text("SELECT doctor_email, doctor_name, doctor_phone, clinic_name FROM Doctor WHERE doctor_email = :email"), {"email": email}).mappings().fetchone()
@@ -779,13 +779,6 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 security = HTTPBearer()
 
-@app.post("/doctor_upload")
-async def doctor_upload_file(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    access_token = credentials.credentials  # This is the token sent from frontend
-    print("📥 Received Access Token:", access_token)
-    
-    # For now just return it back to confirm
-    return {"received_token": access_token}
 
 def get_current_doctor(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
@@ -803,7 +796,7 @@ def get_current_doctor(credentials: HTTPAuthorizationCredentials = Depends(secur
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
-@app.post("/doctor_upload_file")
+@app.post("/api/doctor_upload_file")
 async def doctor_upload_file(
    request: Request,
    files: List[UploadFile] = File(...),
@@ -1054,7 +1047,7 @@ def generate_doctor_link(report_id: int) -> str:
     return f"https://www.purrytails.in/view_report/{report_id}?token={token}"
 
 
-@app.get("/doctor_reports/{doctor_id}")
+@app.get("/api/doctor_reports/{doctor_id}")
 async def get_doctor_reports(
    doctor_id: int,
    page: int = Query(1, ge=1),
@@ -1156,7 +1149,7 @@ async def get_doctor_reports(
         raise HTTPException(status_code=500, detail=f"Failed to fetch reports: {str(e)}")
 
 
-@app.get("/reminders_today")
+@app.get("/api/reminders_today")
 async def get_tomorrows_reminders():
     try:
         with engine.begin() as conn:
@@ -1210,7 +1203,7 @@ async def get_allowed_doctors():
 
 
 
-@app.post("/allowed_doctors")
+@app.post("/api/allowed_doctors")
 async def add_allowed_doctor(data: dict):
     email = data.get("email")
     if not email:
@@ -1238,7 +1231,7 @@ async def add_allowed_doctor(data: dict):
 # -------------------------------
 # 4. Delete allowed doctor
 # -------------------------------
-@app.delete("/allowed_doctors/{doctor_id}")
+@app.delete("/api/allowed_doctors/{doctor_id}")
 async def delete_allowed_doctor(doctor_id: int):
     try:
         with engine.begin() as conn:
@@ -1256,22 +1249,7 @@ async def delete_allowed_doctor(doctor_id: int):
         print("Error deleting allowed doctor:", str(e))
         raise HTTPException(status_code=500, detail="Failed to delete doctor")
 
-@app.post("/print_tomorrow_reminders")
-async def print_tomorrow_reminders():
-    tomorrow = date.today() + timedelta(days=1)
-    print("Found Toms date")
 
-    with engine.begin() as conn:
-        result = conn.execute(
-            text("SELECT * FROM reminders WHERE DATE(reminder_at) = :tomorrow"),
-            {"tomorrow": tomorrow}
-        ).mappings().all()  # ✅ ensures each row is a dict-like mapping
-
-    print("📌 Tomorrow's reminders:")
-    for row in result:
-        print(dict(row))  # now this works
-
-    return {"status": "Reminders printed successfully", "count": len(result)}
 
 LOG = logging.getLogger(__name__)
 
@@ -1323,7 +1301,7 @@ def send_whatsapp(phone: str, template_name: str, lang: str, params: list, whats
         return False, 0, str(e)
 
 
-@app.post("/send_tomorrow_reminders")
+@app.post("/api/send_tomorrow_reminders")
 async def send_tomorrow_reminders():
     session = Session(bind=engine)
 
@@ -1426,7 +1404,7 @@ def current_user_is_vet(vet: bool = False):
 
 
 # GET: Show password page
-@app.get("/view_report/{report_id}", response_class=HTMLResponse)
+@app.get("/api/view_report/{report_id}", response_class=HTMLResponse)
 async def view_report_form(report_id: int, vet: bool = False):
     if current_user_is_vet(vet):
         return await view_report_submit(report_id, password=None, vet=True)
@@ -1456,7 +1434,7 @@ async def view_report_form(report_id: int, vet: bool = False):
     return HTMLResponse(content=html_content)
 
 # POST: Verify password & show report
-@app.post("/view_report/{report_id}", response_class=HTMLResponse)
+@app.post("/api/view_report/{report_id}", response_class=HTMLResponse)
 async def view_report_submit(report_id: int, password: str = Form(None), vet: bool = False):
     with engine.begin() as conn:
         row = conn.execute(
@@ -1602,7 +1580,7 @@ async def view_report_submit(report_id: int, password: str = Form(None), vet: bo
 
 
 # Serve actual report files
-@app.get("/report_file/{file_name:path}")
+@app.get("/api/report_file/{file_name:path}")
 async def serve_report_file(file_name: str, password: str = None):
     # Extract report_id from the first folder in the path
     report_id_part = int(file_name.split("/")[0])

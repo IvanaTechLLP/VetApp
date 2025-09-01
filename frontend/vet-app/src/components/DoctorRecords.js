@@ -28,7 +28,7 @@ const DoctorRecords = ({ profile }) => {
       }
       try {
         setLoading(true);
-        const res = await axios.get(`http://localhost:8000/doctor_reports/${doctorId}`);
+        const res = await axios.get(`/api/doctor_reports/${doctorId}`);
         const serverReports = res.data?.reports ?? [];
 
         // 🔑 Use secure_doctor_link directly

@@ -22,10 +22,8 @@ import requests
 import json
 import requests
 import logging
-
 from urllib.parse import quote
 from pathlib import Path
-
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from datetime import datetime, timedelta, time as dtime
@@ -33,17 +31,11 @@ import pytz
 from fastapi import Depends
 from jose import jwt, JWTError
 from fastapi.security import OAuth2PasswordBearer
-
 import uvicorn
 
 load_dotenv()
 
-DATABASE_URL = os.getenv(
-   "DATABASE_URL",
-   "postgresql://darsh:Darsh123@localhost:5432/vetapp"
-)
-
-
+DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 print(DATABASE_URL)
 
@@ -53,40 +45,22 @@ with engine.connect() as conn:
    print("Connected to DB! Current time:", result.scalar())
 
 
-
-
-
-
-# WHATSAPP_PHONE_NUMBER_ID = "756800504184567"
-# WHATSAPP_ACCESS_TOKEN = "EAAZAoZAtAUH6wBPGA9CHiBAhpd3uAxkw1hTobWORnvxiQ5ejrZAjMVprvgzzkzRgqavoRQsxrr1JxHAbiPnjhBU4STLvM1IqdhqCZBZCfnqkVRHnaQToYG2C0OiEaBJsJH5aAfUgtf4lPm62QX43kPn74nEEqcBO9LhLQPx25bkZAKd7p1z0ZBMDQHzSzirHG05emNnxSmRW1AE55VZAuA9t2GajJQXxx19EF96D"
-
-
-
-
-
-
-
-
 app = FastAPI()
 
 
-origins = [
-   "http://localhost",
-   "http://localhost:3000",
-   "*",
-]
 
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
 
 app.add_middleware(
-   CORSMiddleware,
-   allow_origins=origins,
-   allow_credentials=True,
-   allow_methods=["*"],  # Allow all methods (GET, POST, etc.)
-   allow_headers=["*"],  # Allow all headers
+    CORSMiddleware,
+    allow_origins=[FRONTEND_URL],  # production frontend
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-
-app.add_middleware(SessionMiddleware, secret_key=os.getenv("SESSION_SECRET_KEY"))
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET_KEY)
 
 
 class CustomMiddleware(BaseHTTPMiddleware):
@@ -97,18 +71,7 @@ class CustomMiddleware(BaseHTTPMiddleware):
        return response
 
 
-
-
-
-
-
-
 app.add_middleware(CustomMiddleware)
-import os
-
-
-
-
 
 
 class UserResponse(BaseModel):
@@ -126,11 +89,6 @@ from sqlalchemy import text
 
 def init_db():
    with engine.begin() as conn:
-       # --- Drop unused tables ---
-       conn.execute(text("DROP TABLE IF EXISTS reminder_logs CASCADE;"))
-       conn.execute(text("DROP TABLE IF EXISTS Bookings CASCADE;"))
-       conn.execute(text("DROP TABLE IF EXISTS MessageEvents CASCADE;"))
-
 
        # -- Helper trigger function to maintain updated_at --
        conn.execute(text("""
@@ -991,7 +949,7 @@ async def doctor_upload_file(
            # --- Immediate WhatsApp reminder ---
            try:
                first_file_url = json.loads(report_row["report_pdf_link"])[0]
-               protected_link = f"https://f094a8fc8690.ngrok-free.app/view_report/{report_row['report_id']}"
+               protected_link = f"https://www.purrytails.in/view_report/{report_row['report_id']}"
                # Insert into reminders table
                immediate_message = (
                    f"Hi, Thank you for visiting {clinic_name}. "
@@ -1082,43 +1040,18 @@ async def doctor_upload_file(
 
 
 
-
-
-
-def print_all_table():
-    """Prints all rows from the Reports table in a structured way."""
-    with engine.connect() as conn:
-        print("\n=== Printing Reports table ===\n")
-        try:
-            rows = conn.execute(text("SELECT * FROM Reports;")).fetchall()
-            if rows:
-                for row in rows:
-                    print(dict(row._mapping))  # convert Row to dict
-            else:
-                print("   (empty)")
-        except Exception as e:
-            print(f"❌ Error reading Reports table: {e}")
-        print("\n=== End of Reports table ===\n")
-
-
-
-
-
-
-
-print_all_table()
-
 from itsdangerous import URLSafeTimedSerializer
 
 # --- Signer for secure doctor links ---
-SECRET_KEY = "your_super_secret_key_here"  # use env var in production
+SECRET_KEY = os.getenv("SECRET_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY")
 SIGNER = URLSafeTimedSerializer(SECRET_KEY)
 TOKEN_EXPIRY_SEC = 3600  # 1 hour validity
 
 
 def generate_doctor_link(report_id: int) -> str:
     token = SIGNER.dumps(report_id)
-    return f"https://f094a8fc8690.ngrok-free.app/view_report/{report_id}?token={token}"
+    return f"https://www.purrytails.in/view_report/{report_id}?token={token}"
 
 
 @app.get("/doctor_reports/{doctor_id}")
@@ -1223,6 +1156,263 @@ async def get_doctor_reports(
         raise HTTPException(status_code=500, detail=f"Failed to fetch reports: {str(e)}")
 
 
+@app.get("/reminders_today")
+async def get_tomorrows_reminders():
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT 
+                        reminder_id,
+                        pet_name,
+                        doctor_name,
+                        clinic_name,
+                        reminder_at,
+                        status,
+                        active
+                    FROM reminders
+                    WHERE active = true
+                      AND status = 'pending'
+                      AND DATE(reminder_at AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE + INTERVAL '1 day'
+                    ORDER BY reminder_at ASC
+                """)
+            ).mappings().all()
+
+            reminders = [dict(row) for row in result]
+            print("📌 Pending reminders for tomorrow:", reminders)
+
+            return reminders
+
+    except Exception as e:
+        print("❌ Error fetching tomorrow's reminders:", str(e))
+        raise HTTPException(status_code=500, detail="Failed to fetch reminders")
+
+
+
+
+
+# -------------------------------
+# 2. Get all allowed doctors
+# -------------------------------
+@app.get("/allowed_doctors")
+async def get_allowed_doctors():
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("SELECT doctor_id AS id, doctor_email AS email FROM AllowedDoctors WHERE active = TRUE ORDER BY doctor_id ASC")
+            ).mappings().all()
+
+            return [dict(row) for row in result]
+
+    except Exception as e:
+        print("Error fetching allowed doctors:", str(e))
+        raise HTTPException(status_code=500, detail="Failed to fetch doctors")
+
+
+
+@app.post("/allowed_doctors")
+async def add_allowed_doctor(data: dict):
+    email = data.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("""
+                    INSERT INTO AllowedDoctors (doctor_email, active)
+                    VALUES (:email, TRUE)
+                    ON CONFLICT (doctor_email) DO UPDATE SET active = TRUE
+                    RETURNING doctor_id AS id, doctor_email AS email
+                """),
+                {"email": email}
+            ).mappings().fetchone()
+
+            return dict(result)
+
+    except Exception as e:
+        print("Error adding allowed doctor:", str(e))
+        raise HTTPException(status_code=500, detail="Failed to add doctor")
+
+
+# -------------------------------
+# 4. Delete allowed doctor
+# -------------------------------
+@app.delete("/allowed_doctors/{doctor_id}")
+async def delete_allowed_doctor(doctor_id: int):
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("DELETE FROM AllowedDoctors WHERE doctor_id = :id RETURNING doctor_id"),
+                {"id": doctor_id}
+            ).fetchone()
+
+            if not result:
+                raise HTTPException(status_code=404, detail="Doctor not found")
+
+            return {"status": True, "message": "Doctor removed successfully"}
+
+    except Exception as e:
+        print("Error deleting allowed doctor:", str(e))
+        raise HTTPException(status_code=500, detail="Failed to delete doctor")
+
+@app.post("/print_tomorrow_reminders")
+async def print_tomorrow_reminders():
+    tomorrow = date.today() + timedelta(days=1)
+    print("Found Toms date")
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("SELECT * FROM reminders WHERE DATE(reminder_at) = :tomorrow"),
+            {"tomorrow": tomorrow}
+        ).mappings().all()  # ✅ ensures each row is a dict-like mapping
+
+    print("📌 Tomorrow's reminders:")
+    for row in result:
+        print(dict(row))  # now this works
+
+    return {"status": "Reminders printed successfully", "count": len(result)}
+
+LOG = logging.getLogger(__name__)
+
+def send_whatsapp(phone: str, template_name: str, lang: str, params: list, whatsapp_token: str, whatsapp_number_id: str) -> tuple:
+    """
+    Send a WhatsApp template message via Graph API v20.0 or v22.0.
+    
+    Returns:
+        (ok: bool, status_code: int, response_text: str)
+    """
+    if not whatsapp_token or not whatsapp_number_id:
+        LOG.warning("WhatsApp credentials missing for sending message to %s", phone)
+        return False, 0, "Missing WhatsApp credentials"
+
+    # Normalize phone number to include country code only
+    to = phone.strip()
+    if not to.startswith("+"):
+        LOG.warning("Phone number should include country code: %s", phone)
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": lang},  # must be string, not list
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": str(p)} for p in params]
+                }
+            ]
+        }
+    }
+
+    headers = {
+        "Authorization": f"Bearer {whatsapp_token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        BASE_URL = f"https://graph.facebook.com/v22.0/{whatsapp_number_id}/messages"
+        resp = requests.post(BASE_URL, headers=headers, json=payload, timeout=15)
+        LOG.info("WhatsApp payload sent to %s, status=%s", phone, resp.status_code)
+        return resp.ok, resp.status_code, resp.text
+
+    except Exception as e:
+        LOG.exception("Exception sending WhatsApp template to %s", phone)
+        return False, 0, str(e)
+
+
+@app.post("/send_tomorrow_reminders")
+async def send_tomorrow_reminders():
+    session = Session(bind=engine)
+
+    try:
+        TZ = pytz.timezone("Asia/Kolkata")
+        tomorrow = (datetime.now(TZ) + timedelta(days=1)).date()
+
+        # Start/end of tomorrow in UTC
+        start_k = TZ.localize(datetime.combine(tomorrow, dtime.min)).astimezone(pytz.UTC)
+        end_k   = TZ.localize(datetime.combine(tomorrow, dtime.max)).astimezone(pytz.UTC)
+
+        # Get all reminders for tomorrow
+        rows = session.execute(
+            text("""
+                SELECT r.*, d.whatsapp_access_token, d.whatsapp_number_id
+                FROM Reminders r
+                JOIN Doctor d ON r.doctor_id = d.doctor_id
+                WHERE r.active = true
+                  AND r.status = 'pending'
+                  AND r.reminder_at >= :s AND r.reminder_at <= :e
+            """),
+            {"s": start_k, "e": end_k}
+        ).mappings().all()
+
+        print(f"📌 Found {len(rows)} reminders for tomorrow")
+
+        sent_count, failed_count = 0, 0
+        for r in rows:
+            try:
+                phone = r["pet_parent_phone"]
+                doctor_name = r["doctor_name"]
+                doctor_phone = r["doctor_phone"]
+                pet = (r["pet_name"] or "").strip()
+                clinic = (r["clinic_name"] or "").strip()
+                rem_dt = r["reminder_at"]
+                date_str = rem_dt.astimezone(TZ).strftime("%d-%b-%Y")
+
+                metadata = r["metadata"] or {}
+                template_name = "followup_appointment_reminder"
+                lang = "en"
+
+                params = metadata.get("whatsapp_template_params")
+                if not isinstance(params, list):
+                    params = [pet, date_str, doctor_name, doctor_phone, clinic]
+
+                whatsapp_token = r["whatsapp_access_token"]
+                whatsapp_number_id = r["whatsapp_number_id"]
+
+                ok, code, body = send_whatsapp(
+                    phone, template_name, lang, params, whatsapp_token, whatsapp_number_id
+                )
+
+                if ok:
+                    sent_count += 1
+                    session.execute(
+                        text("UPDATE Reminders SET status='sent', attempts=attempts+1, last_attempt_at=now(), updated_at=now() WHERE reminder_id=:id"),
+                        {"id": r["reminder_id"]}
+                    )
+                else:
+                    failed_count += 1
+                    session.execute(
+                        text("""
+                            UPDATE Reminders
+                            SET attempts = attempts+1,
+                                last_attempt_at=now(),
+                                status = CASE WHEN attempts+1 >= max_attempts THEN 'failed' ELSE 'pending' END,
+                                updated_at=now()
+                            WHERE reminder_id=:id
+                        """),
+                        {"id": r["reminder_id"]}
+                    )
+                session.commit()
+
+            except Exception as e:
+                print("⚠️ Error processing reminder:", r["reminder_id"], e)
+                session.rollback()
+
+        return {
+            "status": "done",
+            "sent": sent_count,
+            "failed": failed_count,
+            "total": len(rows)
+        }
+
+    except Exception as e:
+        print("❌ Error fetching reminders:", str(e))
+        raise HTTPException(status_code=500, detail="Failed to send reminders")
+    finally:
+        session.close()
 
 
 UPLOAD_ROOT = "uploads"
@@ -1437,268 +1627,6 @@ async def serve_report_file(file_name: str, password: str = None):
 
 
 
-
-
-
-@app.get("/reminders_today")
-async def get_tomorrows_reminders():
-    try:
-        with engine.begin() as conn:
-            result = conn.execute(
-                text("""
-                    SELECT 
-                        reminder_id,
-                        pet_name,
-                        doctor_name,
-                        clinic_name,
-                        reminder_at,
-                        status,
-                        active
-                    FROM reminders
-                    WHERE active = true
-                      AND status = 'pending'
-                      AND DATE(reminder_at AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE + INTERVAL '1 day'
-                    ORDER BY reminder_at ASC
-                """)
-            ).mappings().all()
-
-            reminders = [dict(row) for row in result]
-            print("📌 Pending reminders for tomorrow:", reminders)
-
-            return reminders
-
-    except Exception as e:
-        print("❌ Error fetching tomorrow's reminders:", str(e))
-        raise HTTPException(status_code=500, detail="Failed to fetch reminders")
-
-
-
-
-
-# -------------------------------
-# 2. Get all allowed doctors
-# -------------------------------
-@app.get("/allowed_doctors")
-async def get_allowed_doctors():
-    try:
-        with engine.begin() as conn:
-            result = conn.execute(
-                text("SELECT doctor_id AS id, doctor_email AS email FROM AllowedDoctors WHERE active = TRUE ORDER BY doctor_id ASC")
-            ).mappings().all()
-
-            return [dict(row) for row in result]
-
-    except Exception as e:
-        print("Error fetching allowed doctors:", str(e))
-        raise HTTPException(status_code=500, detail="Failed to fetch doctors")
-
-
-# -------------------------------
-# 3. Add allowed doctor
-# -------------------------------
-@app.post("/allowed_doctors")
-async def add_allowed_doctor(data: dict):
-    email = data.get("email")
-    if not email:
-        raise HTTPException(status_code=400, detail="Email is required")
-
-    try:
-        with engine.begin() as conn:
-            result = conn.execute(
-                text("""
-                    INSERT INTO AllowedDoctors (doctor_email, active)
-                    VALUES (:email, TRUE)
-                    ON CONFLICT (doctor_email) DO UPDATE SET active = TRUE
-                    RETURNING doctor_id AS id, doctor_email AS email
-                """),
-                {"email": email}
-            ).mappings().fetchone()
-
-            return dict(result)
-
-    except Exception as e:
-        print("Error adding allowed doctor:", str(e))
-        raise HTTPException(status_code=500, detail="Failed to add doctor")
-
-
-# -------------------------------
-# 4. Delete allowed doctor
-# -------------------------------
-@app.delete("/allowed_doctors/{doctor_id}")
-async def delete_allowed_doctor(doctor_id: int):
-    try:
-        with engine.begin() as conn:
-            result = conn.execute(
-                text("DELETE FROM AllowedDoctors WHERE doctor_id = :id RETURNING doctor_id"),
-                {"id": doctor_id}
-            ).fetchone()
-
-            if not result:
-                raise HTTPException(status_code=404, detail="Doctor not found")
-
-            return {"status": True, "message": "Doctor removed successfully"}
-
-    except Exception as e:
-        print("Error deleting allowed doctor:", str(e))
-        raise HTTPException(status_code=500, detail="Failed to delete doctor")
-
-@app.post("/print_tomorrow_reminders")
-async def print_tomorrow_reminders():
-    tomorrow = date.today() + timedelta(days=1)
-    print("Found Toms date")
-
-    with engine.begin() as conn:
-        result = conn.execute(
-            text("SELECT * FROM reminders WHERE DATE(reminder_at) = :tomorrow"),
-            {"tomorrow": tomorrow}
-        ).mappings().all()  # ✅ ensures each row is a dict-like mapping
-
-    print("📌 Tomorrow's reminders:")
-    for row in result:
-        print(dict(row))  # now this works
-
-    return {"status": "Reminders printed successfully", "count": len(result)}
-
-LOG = logging.getLogger(__name__)
-
-def send_whatsapp(phone: str, template_name: str, lang: str, params: list, whatsapp_token: str, whatsapp_number_id: str) -> tuple:
-    """
-    Send a WhatsApp template message via Graph API v20.0 or v22.0.
-    
-    Returns:
-        (ok: bool, status_code: int, response_text: str)
-    """
-    if not whatsapp_token or not whatsapp_number_id:
-        LOG.warning("WhatsApp credentials missing for sending message to %s", phone)
-        return False, 0, "Missing WhatsApp credentials"
-
-    # Normalize phone number to include country code only
-    to = phone.strip()
-    if not to.startswith("+"):
-        LOG.warning("Phone number should include country code: %s", phone)
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "template",
-        "template": {
-            "name": template_name,
-            "language": {"code": lang},  # must be string, not list
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": [{"type": "text", "text": str(p)} for p in params]
-                }
-            ]
-        }
-    }
-
-    headers = {
-        "Authorization": f"Bearer {whatsapp_token}",
-        "Content-Type": "application/json"
-    }
-
-    try:
-        BASE_URL = f"https://graph.facebook.com/v22.0/{whatsapp_number_id}/messages"
-        resp = requests.post(BASE_URL, headers=headers, json=payload, timeout=15)
-        LOG.info("WhatsApp payload sent to %s, status=%s", phone, resp.status_code)
-        return resp.ok, resp.status_code, resp.text
-
-    except Exception as e:
-        LOG.exception("Exception sending WhatsApp template to %s", phone)
-        return False, 0, str(e)
-
-
-@app.post("/send_tomorrow_reminders")
-async def send_tomorrow_reminders():
-    session = Session(bind=engine)
-
-    try:
-        TZ = pytz.timezone("Asia/Kolkata")
-        tomorrow = (datetime.now(TZ) + timedelta(days=1)).date()
-
-        # Start/end of tomorrow in UTC
-        start_k = TZ.localize(datetime.combine(tomorrow, dtime.min)).astimezone(pytz.UTC)
-        end_k   = TZ.localize(datetime.combine(tomorrow, dtime.max)).astimezone(pytz.UTC)
-
-        # Get all reminders for tomorrow
-        rows = session.execute(
-            text("""
-                SELECT r.*, d.whatsapp_access_token, d.whatsapp_number_id
-                FROM Reminders r
-                JOIN Doctor d ON r.doctor_id = d.doctor_id
-                WHERE r.active = true
-                  AND r.status = 'pending'
-                  AND r.reminder_at >= :s AND r.reminder_at <= :e
-            """),
-            {"s": start_k, "e": end_k}
-        ).mappings().all()
-
-        print(f"📌 Found {len(rows)} reminders for tomorrow")
-
-        sent_count, failed_count = 0, 0
-        for r in rows:
-            try:
-                phone = r["pet_parent_phone"]
-                doctor_name = r["doctor_name"]
-                doctor_phone = r["doctor_phone"]
-                pet = (r["pet_name"] or "").strip()
-                clinic = (r["clinic_name"] or "").strip()
-                rem_dt = r["reminder_at"]
-                date_str = rem_dt.astimezone(TZ).strftime("%d-%b-%Y")
-
-                metadata = r["metadata"] or {}
-                template_name = "followup_appointment_reminder"
-                lang = "en"
-
-                params = metadata.get("whatsapp_template_params")
-                if not isinstance(params, list):
-                    params = [pet, date_str, doctor_name, doctor_phone, clinic]
-
-                whatsapp_token = r["whatsapp_access_token"]
-                whatsapp_number_id = r["whatsapp_number_id"]
-
-                ok, code, body = send_whatsapp(
-                    phone, template_name, lang, params, whatsapp_token, whatsapp_number_id
-                )
-
-                if ok:
-                    sent_count += 1
-                    session.execute(
-                        text("UPDATE Reminders SET status='sent', attempts=attempts+1, last_attempt_at=now(), updated_at=now() WHERE reminder_id=:id"),
-                        {"id": r["reminder_id"]}
-                    )
-                else:
-                    failed_count += 1
-                    session.execute(
-                        text("""
-                            UPDATE Reminders
-                            SET attempts = attempts+1,
-                                last_attempt_at=now(),
-                                status = CASE WHEN attempts+1 >= max_attempts THEN 'failed' ELSE 'pending' END,
-                                updated_at=now()
-                            WHERE reminder_id=:id
-                        """),
-                        {"id": r["reminder_id"]}
-                    )
-                session.commit()
-
-            except Exception as e:
-                print("⚠️ Error processing reminder:", r["reminder_id"], e)
-                session.rollback()
-
-        return {
-            "status": "done",
-            "sent": sent_count,
-            "failed": failed_count,
-            "total": len(rows)
-        }
-
-    except Exception as e:
-        print("❌ Error fetching reminders:", str(e))
-        raise HTTPException(status_code=500, detail="Failed to send reminders")
-    finally:
-        session.close()
 
 
 if __name__ == "__main__":

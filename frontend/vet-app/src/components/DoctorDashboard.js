@@ -166,7 +166,7 @@ const [petParentNumber, setPetParentNumber] = useState("");
           return;
         }
 
-        const res = await axios.get("http://localhost:8000/doctor_profile", { params: { email } });
+        const res = await axios.get("/api/doctor_profile", { params: { email } });
         const serverProfile = res?.data?.data || {};
         console.log("serverProfile:", serverProfile);
 
@@ -242,7 +242,7 @@ const [petParentNumber, setPetParentNumber] = useState("");
 
       console.log("Calling doctor_update with:", payload);
 
-      const res = await axios.post("http://localhost:8000/doctor_update", payload, { headers: { "Content-Type": "application/json" } });
+      const res = await axios.post("/api/doctor_update", payload, { headers: { "Content-Type": "application/json" } });
 
       console.log("doctor_update response:", res.data);
       if (res?.data?.status) {
@@ -336,7 +336,7 @@ const savePrescriptionAndSend = async (e) => {
 
     // 9️⃣ Send to backend
     const res = await axios.post(
-      "http://localhost:8000/doctor_upload_file",
+      "/api/doctor_upload_file",
       formData,
       { headers: { 
         "Content-Type": "multipart/form-data",
@@ -555,7 +555,7 @@ const savePrescriptionAndSend = async (e) => {
   const token = localStorage.getItem("jwt"); // or however you're storing it
 
   const res = await axios.post(
-    "http://localhost:8000/doctor_upload_file",
+    "/api/doctor_upload_file",
     formData,
     {
       headers: {

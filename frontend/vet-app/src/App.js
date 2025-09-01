@@ -7,13 +7,13 @@ import {
 } from "react-router-dom";
 import { GoogleOAuthProvider } from "@react-oauth/google";
 import "./App.css";
-
+import Admin from "./components/Admin";
 import LoginSignupPage from "./components/LoginSignupPage";
+import AdminLogin from "./components/AdminLogin";
 import ErrorBoundary from "./components/ErrorBoundary";
 import LandingPage from "./components/LandingPage";
 import Landing from "./components/Landing";
 import TermsAndConditions from "./components/TermsAndConditions";
-import Payments from "./components/Payments";
 import Doctor from "./components/DoctorDashboard";
 import DoctorRecords from "./components/DoctorRecords"
 
@@ -56,8 +56,8 @@ import DoctorRecords from "./components/DoctorRecords"
 function App() {
   const [profile, setProfile] = useState(null);
   const [isAuthenticated, setIsAuthenticated] = useState([]);
-  const [reports, setReports] = useState([]);
-  const [selectedPetId, setSelectedPetId] = useState("");
+
+
   
 
   const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
@@ -139,6 +139,15 @@ function App() {
               path="/login"
               element={
                 <LoginSignupPage
+                  setProfile={setProfile}
+                  setIsAuthenticated={setIsAuthenticated}
+                />
+              }
+            />
+              <Route
+              path="/admin_login"
+              element={
+                <AdminLogin
                   setProfile={setProfile}
                   setIsAuthenticated={setIsAuthenticated}
                 />
@@ -270,6 +279,17 @@ function App() {
                 )
               }
             />
+              <Route
+              path="/admin"
+              element={
+                isAuthenticated ? (
+                  <Admin profile={profile} logOut={logOut} />
+                ) : (
+                  <Navigate to="/" />
+                )
+              }
+            />
+
 
               <Route
               path="/doctor-records"

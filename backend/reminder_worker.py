@@ -127,12 +127,14 @@ def process_batch(limit: int = 500):
                 reminder_id = r.reminder_id
                 doctor_id = r.doctor_id   # <-- Fetch doctor_id here
                 phone = r.pet_parent_phone
+                doctor_name = r.doctor_name
+                doctor_phone = r.doctor_phone
                 pet = (r.pet_name or "").strip()
                 clinic = (r.clinic_name or "").strip()
                 rem_dt = r.reminder_at
                 date_str = rem_dt.astimezone(TZ).strftime("%d-%b-%Y")
                 metadata = r.metadata or {}
-                template_name = "upcoming_clinic_visit"
+                template_name = "followup_appointment_reminder"
                 lang = metadata.get("whatsapp_language", "en")
 
                 if not template_name:
@@ -144,7 +146,7 @@ def process_batch(limit: int = 500):
                 # determine params: prefer explicit whatsapp_template_params, else default mapping
                 params = metadata.get("whatsapp_template_params")
                 if not isinstance(params, list):
-                    params = [pet, date_str, clinic]
+                    params = [pet, date_str, doctor_name, doctor_phone, clinic]
                 
                 doctor_row = session.execute(
                     text("SELECT whatsapp_access_token, whatsapp_number_id FROM Doctor WHERE doctor_id = :did"),
@@ -183,11 +185,10 @@ def job():
     process_batch(limit=500)
     LOG.info("Reminder job finished")
 
-
 def start_scheduler():
     sched = BlockingScheduler(timezone=TZ)
     # Daily at 08:30 local TZ
-    sched.add_job(job, "cron", hour=11, minute=52, id="daily_reminders",
+    sched.add_job(job, "cron", hour=15, minute=31, id="daily_reminders",
               replace_existing=True, misfire_grace_time=60)
     LOG.info("Starting scheduler (daily 11:52 %s)", TZ_NAME)
     try:

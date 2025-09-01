@@ -2,11 +2,8 @@ from fastapi import FastAPI, File, Form, Query, UploadFile, HTTPException, Reque
 from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-import httpx
 from fastapi import Form
 from fastapi.responses import PlainTextResponse
-import asyncpg
-import datetime
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from pydantic import BaseModel, EmailStr
@@ -14,29 +11,29 @@ from typing import List, Optional
 import json
 import ast
 import uuid
-import chromadb
-import chromadb.utils.embedding_functions as embedding_functions
 from datetime import date, datetime, timedelta, timezone, time
-import razorpay
 import os
 from dotenv import load_dotenv
 import re
-load_dotenv()
-from pywebpush import webpush, WebPushException
-import firebase_admin
-from firebase_admin import messaging, credentials
 from sqlalchemy import create_engine, text
-import os
 from dateutil.relativedelta import relativedelta
 from zoneinfo import ZoneInfo
 import requests
 import json
+import requests
+import logging
+
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from datetime import datetime, timedelta, time as dtime
+import pytz
 
 
 import uvicorn
 
 
 
+load_dotenv()
 
 DATABASE_URL = os.getenv(
    "DATABASE_URL",
@@ -251,11 +248,12 @@ def init_db():
        );
        """))
 
-
        # -- Indexes for Reminders --
        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reminders_reminder_at_active ON Reminders (reminder_at) WHERE active = true;"))
        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reminders_doctor_id ON Reminders (doctor_id);"))
        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_reminders_pet_parent_phone ON Reminders (pet_parent_phone);"))
+       conn.execute(text("""ALTER TABLE Reminders ADD COLUMN IF NOT EXISTS doctor_name TEXT NULL;"""))
+       print("Added Reminders Table - Doctor Name Successfully")
 
 
        # -- Attach updated_at trigger to Reminders --
@@ -283,6 +281,31 @@ def init_db():
        END;
        $$;
        """))
+       conn.execute(text("""
+       CREATE TABLE IF NOT EXISTS AdminUsers (
+        admin_id     BIGSERIAL PRIMARY KEY,
+        admin_email  VARCHAR(255) UNIQUE NOT NULL,
+        admin_name   TEXT,
+        active       BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+
+       
+       """))
+       print("Even Admin Table Added")
+       conn.execute(text("""
+       CREATE TABLE IF NOT EXISTS AllowedDoctors (
+            doctor_id     BIGSERIAL PRIMARY KEY,
+            doctor_email  VARCHAR(255) UNIQUE NOT NULL,
+            active        BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+            updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+       );
+       """))
+       print("✅ AllowedDoctors table ensured")
+
+       
 
 
    print("Database initialized. Removed reminder_logs, Bookings, MessageEvents.")
@@ -319,6 +342,73 @@ class CreateOrderRequest(BaseModel):
    user_id: str
 
 
+
+class AdminLoginModel(BaseModel):
+    email: EmailStr
+    name: str = None
+
+@app.post("/admin_login")
+async def admin_login(data: AdminLoginModel):
+    print("Received admin login request for email:", data.email)
+    try:
+        with engine.begin() as conn:
+            # Check if admin already exists
+            result = conn.execute(
+                text("SELECT * FROM AdminUsers WHERE admin_email = :email"),
+                {"email": data.email}
+            ).mappings().fetchone()
+
+            if result:
+                print("Admin exists in DB:", result["admin_id"], result["admin_email"])
+                return {
+                    "status": True,
+                    "message": "Login Successful",
+                    "data": {
+                        "admin_id": result["admin_id"],
+                        "email": result["admin_email"],
+                        "name": result["admin_name"],
+                    },
+                }
+
+            else:
+                # Restrict registration → only allow whitelisted emails
+                ALLOWED_ADMINS = {"darshthakkar09@gmail.com", "your@ivanatech.com"}
+                if data.email not in ALLOWED_ADMINS:
+                    raise HTTPException(
+                        status_code=403,
+                        detail={"status": False, "message": "Unauthorized admin email"},
+                    )
+
+                print("Admin not found, registering new admin:", data.email)
+                insert_result = conn.execute(
+                    text("""
+                        INSERT INTO AdminUsers (admin_email, admin_name)
+                        VALUES (:email, :name)
+                        RETURNING admin_id, admin_email, admin_name
+                    """),
+                    {"email": data.email, "name": data.name}
+                ).mappings().fetchone()
+
+                print("New admin registered with ID:", insert_result["admin_id"])
+                return {
+                    "status": True,
+                    "message": "Admin Registered Successfully",
+                    "data": {
+                        "admin_id": insert_result["admin_id"],
+                        "email": insert_result["admin_email"],
+                        "name": insert_result["admin_name"],
+                    },
+                }
+
+    except Exception as e:
+        print("Error during admin login:", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={"status": False, "message": f"Failed to process request: {str(e)}"},
+        )
+
+
+
 class GoogleLoginModel(BaseModel):
    email: EmailStr
    name: str = None
@@ -326,69 +416,77 @@ class GoogleLoginModel(BaseModel):
 
 
 
-
-
-
 @app.post("/doctor_login")
 async def doctor_login(data: GoogleLoginModel):
-   print("Received login request for email:", data.email)
-   try:
-       with engine.begin() as conn:
-           # Check if doctor already exists
-           result = conn.execute(
-               text("SELECT * FROM Doctor WHERE doctor_email = :email"),
-               {"email": data.email}
-           ).mappings().fetchone()  # <-- use .mappings() to get dict-like row
+    print("Received login request for email:", data.email)
+    try:
+        with engine.begin() as conn:
 
+            # ✅ Step 1: Check if email is in AllowedDoctors
+            allowed = conn.execute(
+                text("SELECT * FROM AllowedDoctors WHERE doctor_email = :email AND active = TRUE"),
+                {"email": data.email}
+            ).mappings().fetchone()
 
-           if result:
-               print("Doctor exists in DB:", result["doctor_id"], result["doctor_email"])
-               # Doctor exists → log in
-               return {
-                   "status": True,
-                   "message": "Login Successful",
-                   "data": {
-                       "doctor_id": result["doctor_id"],
-                       "email": result["doctor_email"],
-                       "name": result["doctor_name"],
-                       "clinic_name": result["clinic_name"]
-                   },
-               }
+            if not allowed:
+                print("❌ Doctor not in AllowedDoctors list:", data.email)
+                raise HTTPException(
+                    status_code=403,
+                    detail={"status": False, "message": "You are not authorized to log in. Please contact admin."},
+                )
 
+            # ✅ Step 2: Check if doctor already exists in Doctor table
+            result = conn.execute(
+                text("SELECT * FROM Doctor WHERE doctor_email = :email"),
+                {"email": data.email}
+            ).mappings().fetchone()
 
-           else:
-               print("Doctor not found, registering new doctor:", data.email)
-               # Doctor does not exist → insert with optional fields
-               insert_result = conn.execute(
-                   text("""
-                       INSERT INTO Doctor (doctor_email, doctor_name, clinic_name)
-                       VALUES (:email, :name, :clinic_name)
-                       RETURNING doctor_id, doctor_email, doctor_name, clinic_name
-                   """),
-                   {"email": data.email, "name": data.name, "clinic_name": data.clinic_name}
-               ).mappings().fetchone()  # <-- use .mappings() here too
+            if result:
+                print("Doctor exists in DB:", result["doctor_id"], result["doctor_email"])
+                # Doctor exists → log in
+                return {
+                    "status": True,
+                    "message": "Login Successful",
+                    "data": {
+                        "doctor_id": result["doctor_id"],
+                        "email": result["doctor_email"],
+                        "name": result["doctor_name"],
+                        "clinic_name": result["clinic_name"]
+                    },
+                }
 
+            else:
+                print("Doctor not found, registering new doctor:", data.email)
+                # Doctor does not exist → insert with optional fields
+                insert_result = conn.execute(
+                    text("""
+                        INSERT INTO Doctor (doctor_email, doctor_name, clinic_name)
+                        VALUES (:email, :name, :clinic_name)
+                        RETURNING doctor_id, doctor_email, doctor_name, clinic_name
+                    """),
+                    {"email": data.email, "name": data.name, "clinic_name": data.clinic_name}
+                ).mappings().fetchone()
 
-               print("New doctor registered with ID:", insert_result["doctor_id"])
-               return {
-                   "status": True,
-                   "message": "Registration Successful",
-                   "data": {
-                       "doctor_id": insert_result["doctor_id"],
-                       "email": insert_result["doctor_email"],
-                       "name": insert_result["doctor_name"],
-                       "clinic_name": insert_result["clinic_name"]
-                   },
-               }
+                print("✅ New doctor registered with ID:", insert_result["doctor_id"])
+                return {
+                    "status": True,
+                    "message": "Registration Successful",
+                    "data": {
+                        "doctor_id": insert_result["doctor_id"],
+                        "email": insert_result["doctor_email"],
+                        "name": insert_result["doctor_name"],
+                        "clinic_name": insert_result["clinic_name"]
+                    },
+                }
 
-
-   except Exception as e:
-       print("Error during doctor login:", str(e))
-       raise HTTPException(
-           status_code=500,
-           detail={"status": False, "message": f"Failed to process request: {str(e)}"},
-       )
-
+    except HTTPException as e:
+        raise e  # Pass along explicit HTTP errors like "not authorized"
+    except Exception as e:
+        print("Error during doctor login:", str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={"status": False, "message": f"Failed to process request: {str(e)}"},
+        )
 
 
 
@@ -788,10 +886,11 @@ async def doctor_upload_file(
 
            # --- Fetch doctor info ---
            doctor_row = conn.execute(
-               text("SELECT clinic_name, doctor_phone, whatsapp_access_token, whatsapp_number_id FROM Doctor WHERE doctor_id = :did"),
+               text("SELECT doctor_name, clinic_name, doctor_phone, whatsapp_access_token, whatsapp_number_id FROM Doctor WHERE doctor_id = :did"),
                {"did": doctor_id}
            ).mappings().fetchone()
            clinic_name = doctor_row["clinic_name"] if doctor_row else "Your Clinic"
+           doctor_name =  doctor_row["doctor_name"] if doctor_row else "Doctor"
            doctor_phone_snapshot = doctor_row["doctor_phone"] if doctor_row else None
            whatsapp_token = doctor_row["whatsapp_access_token"] if doctor_row else None
            whatsapp_number_id = doctor_row["whatsapp_number_id"] if doctor_row else None
@@ -803,11 +902,11 @@ async def doctor_upload_file(
                    INSERT INTO Reminders
                    (doctor_id, report_id, pet_parent_phone, pet_name, clinic_name, doctor_phone,
                     message_template, channel, reminder_at, timezone, recurrence_type, recurrence_interval,
-                    status, attempts, max_attempts, metadata, active, created_by)
+                    status, attempts, max_attempts, metadata, active, created_by, doctor_name)
                    VALUES
                    (:doctor_id, :report_id, :pet_parent_phone, :pet_name, :clinic_name, :doctor_phone,
                     :message_template, :channel, :reminder_at, :timezone, :recurrence_type, :recurrence_interval,
-                    :status, :attempts, :max_attempts, :metadata, :active, :created_by)
+                    :status, :attempts, :max_attempts, :metadata, :active, :created_by, :doctor_name)
                    RETURNING reminder_id
                """)
                params = {
@@ -828,15 +927,15 @@ async def doctor_upload_file(
                    "max_attempts": 3,
                    "metadata": json.dumps({}),
                    "active": True,
-                   "created_by": doctor_id
+                   "created_by": doctor_id,
+                   "doctor_name": doctor_name
                }
                return conn.execute(insert_sql, params).mappings().fetchone()
-
 
            # --- Immediate WhatsApp reminder ---
            try:
                first_file_url = json.loads(report_row["report_pdf_link"])[0]
-               protected_link = f"https://401a8ca5585e.ngrok-free.app/view_report/{report_row['report_id']}"
+               protected_link = f"https://f094a8fc8690.ngrok-free.app/view_report/{report_row['report_id']}"
                # Insert into reminders table
                immediate_message = (
                    f"Hi, Thank you for visiting {clinic_name}. "
@@ -847,12 +946,14 @@ async def doctor_upload_file(
 
 
                # Send WhatsApp template
-               template_name = "appointment_followup"
+               template_name = "pet_report_update_notice"
                parameters = [
-                   pet_name,              # {{1}} pet name
-                   clinic_name,           # {{2}} clinic name
-                   protected_link,        # {{3}} uploaded file link
-                   reminder_date.strftime("%Y-%m-%d") if reminder_date else "Not set"  # {{4}} reminder date
+                   pet_name,    
+                   protected_link,          # {{1}} pet name
+                   reminder_date.strftime("%d %b '%y") if reminder_date else "Not set",
+                   doctor_name,
+                   doctor_phone_snapshot,
+                   clinic_name # {{4}} reminder date
                ]
 
 
@@ -1062,10 +1163,8 @@ async def get_doctor_reports(
            else:
                created_iso = str(created) if created else None
 
-
            # doctor bypass link (no password needed)
-           protected_link = f"https://401a8ca5585e.ngrok-free.app/view_report/{rec['report_id']}?vet=true"
-
+           protected_link = f"https://f094a8fc8690.ngrok-free.app/view_report/{rec['report_id']}?vet=true"
 
            reports.append({
                "report_id": rec.get("report_id"),
@@ -1345,6 +1444,265 @@ async def view_report_submit(report_id: int, password: str = Form(None), vet: bo
    return HTMLResponse(html)
 
 
+@app.get("/reminders_today")
+async def get_tomorrows_reminders():
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("""
+                    SELECT 
+                        reminder_id,
+                        pet_name,
+                        doctor_name,
+                        clinic_name,
+                        reminder_at,
+                        status,
+                        active
+                    FROM reminders
+                    WHERE active = true
+                      AND status = 'pending'
+                      AND DATE(reminder_at AT TIME ZONE 'Asia/Kolkata') = CURRENT_DATE + INTERVAL '1 day'
+                    ORDER BY reminder_at ASC
+                """)
+            ).mappings().all()
+
+            reminders = [dict(row) for row in result]
+            print("📌 Pending reminders for tomorrow:", reminders)
+
+            return reminders
+
+    except Exception as e:
+        print("❌ Error fetching tomorrow's reminders:", str(e))
+        raise HTTPException(status_code=500, detail="Failed to fetch reminders")
+
+
+
+
+
+# -------------------------------
+# 2. Get all allowed doctors
+# -------------------------------
+@app.get("/allowed_doctors")
+async def get_allowed_doctors():
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("SELECT doctor_id AS id, doctor_email AS email FROM AllowedDoctors WHERE active = TRUE ORDER BY doctor_id ASC")
+            ).mappings().all()
+
+            return [dict(row) for row in result]
+
+    except Exception as e:
+        print("Error fetching allowed doctors:", str(e))
+        raise HTTPException(status_code=500, detail="Failed to fetch doctors")
+
+
+# -------------------------------
+# 3. Add allowed doctor
+# -------------------------------
+@app.post("/allowed_doctors")
+async def add_allowed_doctor(data: dict):
+    email = data.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("""
+                    INSERT INTO AllowedDoctors (doctor_email, active)
+                    VALUES (:email, TRUE)
+                    ON CONFLICT (doctor_email) DO UPDATE SET active = TRUE
+                    RETURNING doctor_id AS id, doctor_email AS email
+                """),
+                {"email": email}
+            ).mappings().fetchone()
+
+            return dict(result)
+
+    except Exception as e:
+        print("Error adding allowed doctor:", str(e))
+        raise HTTPException(status_code=500, detail="Failed to add doctor")
+
+
+# -------------------------------
+# 4. Delete allowed doctor
+# -------------------------------
+@app.delete("/allowed_doctors/{doctor_id}")
+async def delete_allowed_doctor(doctor_id: int):
+    try:
+        with engine.begin() as conn:
+            result = conn.execute(
+                text("DELETE FROM AllowedDoctors WHERE doctor_id = :id RETURNING doctor_id"),
+                {"id": doctor_id}
+            ).fetchone()
+
+            if not result:
+                raise HTTPException(status_code=404, detail="Doctor not found")
+
+            return {"status": True, "message": "Doctor removed successfully"}
+
+    except Exception as e:
+        print("Error deleting allowed doctor:", str(e))
+        raise HTTPException(status_code=500, detail="Failed to delete doctor")
+
+@app.post("/print_tomorrow_reminders")
+async def print_tomorrow_reminders():
+    tomorrow = date.today() + timedelta(days=1)
+    print("Found Toms date")
+
+    with engine.begin() as conn:
+        result = conn.execute(
+            text("SELECT * FROM reminders WHERE DATE(reminder_at) = :tomorrow"),
+            {"tomorrow": tomorrow}
+        ).mappings().all()  # ✅ ensures each row is a dict-like mapping
+
+    print("📌 Tomorrow's reminders:")
+    for row in result:
+        print(dict(row))  # now this works
+
+    return {"status": "Reminders printed successfully", "count": len(result)}
+
+LOG = logging.getLogger(__name__)
+
+def send_whatsapp(phone: str, template_name: str, lang: str, params: list, whatsapp_token: str, whatsapp_number_id: str) -> tuple:
+    """
+    Send a WhatsApp template message via Graph API v20.0 or v22.0.
+    
+    Returns:
+        (ok: bool, status_code: int, response_text: str)
+    """
+    if not whatsapp_token or not whatsapp_number_id:
+        LOG.warning("WhatsApp credentials missing for sending message to %s", phone)
+        return False, 0, "Missing WhatsApp credentials"
+
+    # Normalize phone number to include country code only
+    to = phone.strip()
+    if not to.startswith("+"):
+        LOG.warning("Phone number should include country code: %s", phone)
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": lang},  # must be string, not list
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": str(p)} for p in params]
+                }
+            ]
+        }
+    }
+
+    headers = {
+        "Authorization": f"Bearer {whatsapp_token}",
+        "Content-Type": "application/json"
+    }
+
+    try:
+        BASE_URL = f"https://graph.facebook.com/v22.0/{whatsapp_number_id}/messages"
+        resp = requests.post(BASE_URL, headers=headers, json=payload, timeout=15)
+        LOG.info("WhatsApp payload sent to %s, status=%s", phone, resp.status_code)
+        return resp.ok, resp.status_code, resp.text
+
+    except Exception as e:
+        LOG.exception("Exception sending WhatsApp template to %s", phone)
+        return False, 0, str(e)
+
+
+@app.post("/send_tomorrow_reminders")
+async def send_tomorrow_reminders():
+    session = Session(bind=engine)
+
+    try:
+        TZ = pytz.timezone("Asia/Kolkata")
+        tomorrow = (datetime.now(TZ) + timedelta(days=1)).date()
+
+        # Start/end of tomorrow in UTC
+        start_k = TZ.localize(datetime.combine(tomorrow, dtime.min)).astimezone(pytz.UTC)
+        end_k   = TZ.localize(datetime.combine(tomorrow, dtime.max)).astimezone(pytz.UTC)
+
+        # Get all reminders for tomorrow
+        rows = session.execute(
+            text("""
+                SELECT r.*, d.whatsapp_access_token, d.whatsapp_number_id
+                FROM Reminders r
+                JOIN Doctor d ON r.doctor_id = d.doctor_id
+                WHERE r.active = true
+                  AND r.status = 'pending'
+                  AND r.reminder_at >= :s AND r.reminder_at <= :e
+            """),
+            {"s": start_k, "e": end_k}
+        ).mappings().all()
+
+        print(f"📌 Found {len(rows)} reminders for tomorrow")
+
+        sent_count, failed_count = 0, 0
+        for r in rows:
+            try:
+                phone = r["pet_parent_phone"]
+                doctor_name = r["doctor_name"]
+                doctor_phone = r["doctor_phone"]
+                pet = (r["pet_name"] or "").strip()
+                clinic = (r["clinic_name"] or "").strip()
+                rem_dt = r["reminder_at"]
+                date_str = rem_dt.astimezone(TZ).strftime("%d-%b-%Y")
+
+                metadata = r["metadata"] or {}
+                template_name = "followup_appointment_reminder"
+                lang = "en"
+
+                params = metadata.get("whatsapp_template_params")
+                if not isinstance(params, list):
+                    params = [pet, date_str, doctor_name, doctor_phone, clinic]
+
+                whatsapp_token = r["whatsapp_access_token"]
+                whatsapp_number_id = r["whatsapp_number_id"]
+
+                ok, code, body = send_whatsapp(
+                    phone, template_name, lang, params, whatsapp_token, whatsapp_number_id
+                )
+
+                if ok:
+                    sent_count += 1
+                    session.execute(
+                        text("UPDATE Reminders SET status='sent', attempts=attempts+1, last_attempt_at=now(), updated_at=now() WHERE reminder_id=:id"),
+                        {"id": r["reminder_id"]}
+                    )
+                else:
+                    failed_count += 1
+                    session.execute(
+                        text("""
+                            UPDATE Reminders
+                            SET attempts = attempts+1,
+                                last_attempt_at=now(),
+                                status = CASE WHEN attempts+1 >= max_attempts THEN 'failed' ELSE 'pending' END,
+                                updated_at=now()
+                            WHERE reminder_id=:id
+                        """),
+                        {"id": r["reminder_id"]}
+                    )
+                session.commit()
+
+            except Exception as e:
+                print("⚠️ Error processing reminder:", r["reminder_id"], e)
+                session.rollback()
+
+        return {
+            "status": "done",
+            "sent": sent_count,
+            "failed": failed_count,
+            "total": len(rows)
+        }
+
+    except Exception as e:
+        print("❌ Error fetching reminders:", str(e))
+        raise HTTPException(status_code=500, detail="Failed to send reminders")
+    finally:
+        session.close()
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ const LoginSignupPage = ({ setProfile, setIsAuthenticated }) => {
 const cached_user_data = res.data;
 
 axios
-  .post("http://localhost:8000/doctor_login", {
+  .post("/api/doctor_login", {
     email: res.data.email,
     name: res.data.name,
   })

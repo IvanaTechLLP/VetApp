@@ -8,7 +8,7 @@ const AdminPage = () => {
 
   // Fetch today's reminders
   useEffect(() => {
-    fetch("http://localhost:8000/reminders_today")
+    fetch("/api/reminders_today")
       .then((res) => res.json())
       .then((data) => {
         console.log("Reminders API response:", data);  // debug log
@@ -19,7 +19,7 @@ const AdminPage = () => {
 
   // Fetch allowed doctors
   useEffect(() => {
-    fetch("http://localhost:8000/allowed_doctors")
+    fetch("/api/allowed_doctors")
       .then((res) => res.json())
       .then((data) => setDoctors(data))
       .catch((err) => console.error("Error fetching doctors:", err));
@@ -29,7 +29,7 @@ const AdminPage = () => {
   const handleAddDoctor = async (e) => {
     e.preventDefault();
 
-    const res = await fetch("http://localhost:8000/allowed_doctors", {
+    const res = await fetch("/api/allowed_doctors", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
@@ -46,7 +46,7 @@ const AdminPage = () => {
 
   // Delete doctor email
   const handleDeleteDoctor = async (id) => {
-    const res = await fetch(`http://localhost:8000/allowed_doctors/${id}`, {
+    const res = await fetch(`/api/allowed_doctors/${id}`, {
       method: "DELETE",
     });
 
@@ -59,7 +59,7 @@ const AdminPage = () => {
   const handleSendReminders = async () => {
     setLoading(true);
     try {
-      const res = await fetch("http://localhost:8000/send_tomorrow_reminders", {
+      const res = await fetch("/api/send_tomorrow_reminders", {
         method: "POST",
       });
       if (res.ok) {

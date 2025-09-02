@@ -32,3 +32,4 @@ regex==2024.4.16
 pyparsing==3.1.2
 packaging==24.0
 coloredlogs==15.0.1
+itsdangerous==2.1.2

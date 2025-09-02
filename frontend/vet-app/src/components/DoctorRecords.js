@@ -7,7 +7,7 @@ const DoctorRecords = ({ profile }) => {
   const doctorId =
     profile?.user_id ||
     JSON.parse(localStorage.getItem("user") || "{}")?.user_id;
-
+const API_BASE_URL = process.env.REACT_APP_API_URL;
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchDate, setSearchDate] = useState("");
@@ -28,7 +28,7 @@ const DoctorRecords = ({ profile }) => {
       }
       try {
         setLoading(true);
-        const res = await axios.get(`/api/doctor_reports/${doctorId}`);
+        const res = await axios.get(`${API_BASE_URL}/api/doctor_reports/${doctorId}`);
         const serverReports = res.data?.reports ?? [];
 
         // 🔑 Use secure_doctor_link directly

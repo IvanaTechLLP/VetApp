@@ -61,7 +61,7 @@ function App() {
   
 
   const clientId = process.env.REACT_APP_GOOGLE_CLIENT_ID;
-
+  console.log("REACT_APP_GOOGLE_CLIENT_ID",clientId)
 
 
 

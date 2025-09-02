@@ -17,7 +17,7 @@ console.log(token);
   const [petName, setPetName] = useState("");
   const [whatsappAccessToken, setWhatsappAccessToken] = useState("");
   const[whatsappNumberId, setWhatsappNumberId] = useState("");
-
+const API_BASE_URL = process.env.REACT_APP_API_URL;
 
 const [petParentNumber, setPetParentNumber] = useState("");
 
@@ -161,12 +161,12 @@ const [petParentNumber, setPetParentNumber] = useState("");
         const email = profile?.email || JSON.parse(localStorage.getItem("user"))?.email;
         if (!email) {
           console.warn("No doctor email available to check profile");
-          // if we can't determine identity, show form as conservative fallback
+          // if we can`t determine identity, show form as conservative fallback
           setShowUpdateForm(true);
           return;
         }
 
-        const res = await axios.get("/api/doctor_profile", { params: { email } });
+        const res = await axios.get(`${API_BASE_URL}/api/doctor_profile`, { params: { email } });
         const serverProfile = res?.data?.data || {};
         console.log("serverProfile:", serverProfile);
 
@@ -242,13 +242,13 @@ const [petParentNumber, setPetParentNumber] = useState("");
 
       console.log("Calling doctor_update with:", payload);
 
-      const res = await axios.post("/api/doctor_update", payload, { headers: { "Content-Type": "application/json" } });
+      const res = await axios.post(`${API_BASE_URL}/api/doctor_update`, payload, { headers: { "Content-Type": "application/json" } });
 
       console.log("doctor_update response:", res.data);
       if (res?.data?.status) {
         setUpdateMessage(res.data.message || "Profile updated");
 
-        // write canonical profile to localStorage so overlay won't reappear
+        // write canonical profile to localStorage so overlay won`t reappear
         const updatedProfile = {
           ...JSON.parse(localStorage.getItem("user") || "{}"),
           name: res.data.data.doctor_name || doctorName,
@@ -336,7 +336,7 @@ const savePrescriptionAndSend = async (e) => {
 
     // 9️⃣ Send to backend
     const res = await axios.post(
-      "/api/doctor_upload_file",
+      `${API_BASE_URL}/api/doctor_upload_file`,
       formData,
       { headers: { 
         "Content-Type": "multipart/form-data",
@@ -381,11 +381,11 @@ const savePrescriptionAndSend = async (e) => {
         </div>
 
         <button className="phone-hamburger" onClick={toggleMobileMenu}>
-          {menuOpen ? '×' : '☰'}
+          {menuOpen ? `×` : `☰`}
         </button>
       </nav>
 
-      <div className={`phone-mobile-menu ${menuOpen ? 'open' : ''}`}>
+      <div className={`phone-mobile-menu ${menuOpen ? `open` : ``}`}>
         <ul className="home-nav-links">
           <li>
             <a className="current-link">Dashboard</a>
@@ -552,10 +552,10 @@ const savePrescriptionAndSend = async (e) => {
       formData.append("reminder", reminderToSend);
 
       try {
-  const token = localStorage.getItem("jwt"); // or however you're storing it
+  const token = localStorage.getItem("jwt"); // or however you`re storing it
 
   const res = await axios.post(
-    "/api/doctor_upload_file",
+    `${API_BASE_URL}/api/doctor_upload_file`,
     formData,
     {
       headers: {
@@ -805,10 +805,10 @@ const savePrescriptionAndSend = async (e) => {
 
           <div className="chip-group">
             <label>Fur/Coat Condition</label>
-            {['Dry', 'Oily', 'Wet', 'Matted', 'Shedding', 'Bald patches'].map((item) => (
+            {[`Dry`, `Oily`, `Wet`, `Matted`, `Shedding`, `Bald patches`].map((item) => (
               <button
                 key={item}
-                className={`chip ${selectedFur === item ? 'selected' : ''}`}
+                className={`chip ${selectedFur === item ? `selected` : ``}`}
                 onClick={() => setSelectedFur(item)}
               >
                 {item}
@@ -818,10 +818,10 @@ const savePrescriptionAndSend = async (e) => {
 
           <div className="chip-group">
             <label>Skin Condition</label>
-              {['Normal', 'Rash', 'Redness', 'Allergic', 'Fungal signs', 'Parasites visible'].map((item) => (
+              {[`Normal`, `Rash`, `Redness`, `Allergic`, `Fungal signs`, `Parasites visible`].map((item) => (
                 <button
                   key={item}
-                  className={`chip ${selectedSkin === item ? 'selected' : ''}`}
+                  className={`chip ${selectedSkin === item ? `selected` : ``}`}
                   onClick={() => setSelectedSkin(item)}
                 >
                   {item}
@@ -873,7 +873,7 @@ const savePrescriptionAndSend = async (e) => {
             {allDiagnoses.map((diag) => (
               <button
                 key={diag}
-                className={`chip ${selectedDiagnosis.includes(diag) ? 'selected' : ''}`}
+                className={`chip ${selectedDiagnosis.includes(diag) ? `selected` : ``}`}
                 onClick={() => toggleDiagnosis(diag)}
               >
                 {diag}

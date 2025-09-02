@@ -50,11 +50,12 @@ app = FastAPI()
 
 
 FRONTEND_URL = os.getenv("FRONTEND_URL")
+print(FRONTEND_URL)
 SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],  # production frontend
+    allow_origins=[FRONTEND_URL],  # ✅ only allow your frontend
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -389,35 +390,38 @@ class GoogleLoginModel(BaseModel):
 
 @app.post("/api/doctor_login")
 async def doctor_login(data: GoogleLoginModel):
-    print("Received login request for email:", data.email)
+    print("🔹 Received login request for email:", data.email)
+
     try:
         with engine.begin() as conn:
 
-            # ✅ Step 1: Check if email is in AllowedDoctors
+            # Step 0: fetch doctor if exists
+            doctor = conn.execute(
+                text("SELECT * FROM Doctor WHERE doctor_email = :email"),
+                {"email": data.email}
+            ).mappings().fetchone()
+            print("Doctor record in DB:", doctor)
+
+            # Step 1: fetch allowed doctor entry
             allowed = conn.execute(
                 text("SELECT * FROM AllowedDoctors WHERE doctor_email = :email AND active = TRUE"),
                 {"email": data.email}
             ).mappings().fetchone()
+            print("AllowedDoctors record:", allowed)
 
+            # Step 2: Block if doctor not allowed
             if not allowed:
-                print("❌ Doctor not in AllowedDoctors list:", data.email)
+                print("❌ Doctor is NOT allowed to login:", data.email)
                 raise HTTPException(
                     status_code=403,
                     detail={"status": False, "message": "You are not authorized to log in. Please contact admin."},
                 )
 
-            # ✅ Step 2: Check if doctor already exists
-            result = conn.execute(
-                text("SELECT * FROM Doctor WHERE doctor_email = :email"),
-                {"email": data.email}
-            ).mappings().fetchone()
-
-            if result:
-                print("Doctor exists in DB:", result["doctor_id"], result["doctor_email"])
-
-                # 🔑 Create JWT
+            # Step 3: Doctor exists → login
+            if doctor:
+                print("✅ Doctor exists and is allowed:", doctor["doctor_id"], doctor["doctor_email"])
                 access_token = create_access_token(
-                    data={"sub": str(result["doctor_id"]), "email": result["doctor_email"], "role": "doctor"},
+                    data={"sub": str(doctor["doctor_id"]), "email": doctor["doctor_email"], "role": "doctor"},
                     expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
                 )
 
@@ -427,56 +431,52 @@ async def doctor_login(data: GoogleLoginModel):
                     "access_token": access_token,
                     "token_type": "bearer",
                     "data": {
-                        "doctor_id": result["doctor_id"],
-                        "email": result["doctor_email"],
-                        "name": result["doctor_name"],
-                        "clinic_name": result["clinic_name"]
+                        "doctor_id": doctor["doctor_id"],
+                        "email": doctor["doctor_email"],
+                        "name": doctor["doctor_name"],
+                        "clinic_name": doctor["clinic_name"]
                     },
                 }
 
-            else:
-                print("Doctor not found, registering new doctor:", data.email)
+            # Step 4: Doctor does not exist → register (allowed already checked)
+            print("🆕 Doctor not found, registering new doctor:", data.email)
+            insert_result = conn.execute(
+                text("""
+                    INSERT INTO Doctor (doctor_email, doctor_name, clinic_name)
+                    VALUES (:email, :name, :clinic_name)
+                    RETURNING doctor_id, doctor_email, doctor_name, clinic_name
+                """),
+                {"email": data.email, "name": data.name, "clinic_name": data.clinic_name}
+            ).mappings().fetchone()
 
-                insert_result = conn.execute(
-                    text("""
-                        INSERT INTO Doctor (doctor_email, doctor_name, clinic_name)
-                        VALUES (:email, :name, :clinic_name)
-                        RETURNING doctor_id, doctor_email, doctor_name, clinic_name
-                    """),
-                    {"email": data.email, "name": data.name, "clinic_name": data.clinic_name}
-                ).mappings().fetchone()
+            print("✅ New doctor registered with ID:", insert_result["doctor_id"])
 
-                print("✅ New doctor registered with ID:", insert_result["doctor_id"])
+            access_token = create_access_token(
+                data={"sub": str(insert_result["doctor_id"]), "email": insert_result["doctor_email"], "role": "doctor"},
+                expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+            )
 
-                # 🔑 Create JWT for new doctor
-                access_token = create_access_token(
-                    data={"sub": str(insert_result["doctor_id"]), "email": insert_result["doctor_email"], "role": "doctor"},
-                    expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-                )
-
-                return {
-                    "status": True,
-                    "message": "Registration Successful",
-                    "access_token": access_token,
-                    "token_type": "bearer",
-                    "data": {
-                        "doctor_id": insert_result["doctor_id"],
-                        "email": insert_result["doctor_email"],
-                        "name": insert_result["doctor_name"],
-                        "clinic_name": insert_result["clinic_name"]
-                    },
-                }
+            return {
+                "status": True,
+                "message": "Registration Successful",
+                "access_token": access_token,
+                "token_type": "bearer",
+                "data": {
+                    "doctor_id": insert_result["doctor_id"],
+                    "email": insert_result["doctor_email"],
+                    "name": insert_result["doctor_name"],
+                    "clinic_name": insert_result["clinic_name"]
+                },
+            }
 
     except HTTPException as e:
         raise e
     except Exception as e:
-        print("Error during doctor login:", str(e))
+        print("❗ Error during doctor login:", str(e))
         raise HTTPException(
             status_code=500,
             detail={"status": False, "message": f"Failed to process request: {str(e)}"},
         )
-
-
 
 
 class DoctorUpdateModel(BaseModel):
@@ -1187,7 +1187,7 @@ async def get_tomorrows_reminders():
 # -------------------------------
 # 2. Get all allowed doctors
 # -------------------------------
-@app.get("/allowed_doctors")
+@app.get("/api/allowed_doctors")
 async def get_allowed_doctors():
     try:
         with engine.begin() as conn:

@@ -5,10 +5,10 @@ const AdminPage = () => {
   const [doctors, setDoctors] = useState([]);
   const [email, setEmail] = useState("");
     const [loading, setLoading] = useState(false);
-
-  // Fetch today's reminders
+const API_BASE_URL = process.env.REACT_APP_API_URL;
+  // Fetch today`s reminders
   useEffect(() => {
-    fetch("/api/reminders_today")
+    fetch(`${API_BASE_URL}/api/reminders_today`)
       .then((res) => res.json())
       .then((data) => {
         console.log("Reminders API response:", data);  // debug log
@@ -19,7 +19,7 @@ const AdminPage = () => {
 
   // Fetch allowed doctors
   useEffect(() => {
-    fetch("/api/allowed_doctors")
+    fetch(`${API_BASE_URL}/api/allowed_doctors`)
       .then((res) => res.json())
       .then((data) => setDoctors(data))
       .catch((err) => console.error("Error fetching doctors:", err));
@@ -29,7 +29,7 @@ const AdminPage = () => {
   const handleAddDoctor = async (e) => {
     e.preventDefault();
 
-    const res = await fetch("/api/allowed_doctors", {
+    const res = await fetch(`${API_BASE_URL}/api/allowed_doctors`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ email }),
@@ -46,7 +46,7 @@ const AdminPage = () => {
 
   // Delete doctor email
   const handleDeleteDoctor = async (id) => {
-    const res = await fetch(`/api/allowed_doctors/${id}`, {
+    const res = await fetch(`${API_BASE_URL}/api/allowed_doctors/${id}`, {
       method: "DELETE",
     });
 
@@ -59,7 +59,7 @@ const AdminPage = () => {
   const handleSendReminders = async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/send_tomorrow_reminders", {
+      const res = await fetch(`${API_BASE_URL}/api/send_tomorrow_reminders`, {
         method: "POST",
       });
       if (res.ok) {
@@ -77,7 +77,7 @@ const AdminPage = () => {
 
   return (
     <div className="p-6 space-y-10">
-      {/* Section 1: Today's Reminders */}
+      {/* Section 1: Today`s Reminders */}
       <section>
         <h2 className="text-2xl font-bold mb-4">Reminders for Today</h2>
         <table className="w-full border-collapse border border-gray-300">

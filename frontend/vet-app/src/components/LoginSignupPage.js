@@ -17,6 +17,7 @@ const LoginSignupPage = ({ setProfile, setIsAuthenticated }) => {
     onError: (error) => console.log("Login Failed:", error),
     scope: "openid profile email",
   });
+  const API_BASE_URL = process.env.REACT_APP_API_URL;
 
   useEffect(() => {
     if (user) {
@@ -39,7 +40,7 @@ const LoginSignupPage = ({ setProfile, setIsAuthenticated }) => {
 const cached_user_data = res.data;
 
 axios
-  .post("/api/doctor_login", {
+  .post(`${API_BASE_URL}/api/doctor_login`, {
     email: res.data.email,
     name: res.data.name,
   })

@@ -9,6 +9,7 @@ const AdminLoginPage = ({ setProfile, setIsAuthenticated }) => {
   const [user, setUser] = useState(null);
   const userType = "admin";
   const navigate = useNavigate();
+  const API_BASE_URL = process.env.REACT_APP_API_URL;
 
   const login = useGoogleLogin({
     onSuccess: (codeResponse) => {
@@ -38,7 +39,7 @@ const AdminLoginPage = ({ setProfile, setIsAuthenticated }) => {
           const cached_user_data = res.data;
 
           axios
-            .post("/api/admin_login", {
+            .post(`${API_BASE_URL}/api/admin_login`, {
               email: res.data.email,
               name: res.data.name,
             })

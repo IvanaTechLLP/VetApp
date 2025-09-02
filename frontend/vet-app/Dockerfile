@@ -1,20 +1,20 @@
-# frontend/Dockerfile
+# frontend/vet-app/Dockerfile
 FROM node:20-alpine as builder
 WORKDIR /app
 
-# 1️⃣ Copy only package.json & package-lock.json first
+# copy package files
 COPY package*.json ./
 
-# 2️⃣ Install dependencies
+# install dependencies
 RUN npm install --legacy-peer-deps
 
-# 3️⃣ Copy the rest of the app
+# copy rest of the app
 COPY . .
 
-# 4️⃣ Build
+# build React app
 RUN npm run build
 
-# 5️⃣ Serve via nginx
+# serve via nginx
 FROM nginx:alpine
 COPY --from=builder /app/build /usr/share/nginx/html
 EXPOSE 80

@@ -19,7 +19,7 @@ services:
       dockerfile: Dockerfile
     container_name: vetapp_backend
     env_file:
-      - ./backend/.env.production
+      - ./backend/.env.prod
     depends_on:
       - db
     restart: always
@@ -30,7 +30,7 @@ services:
       dockerfile: Dockerfile
     container_name: vetapp_frontend
     env_file:
-      - ./frontend/vet-app/.env.production
+      - ./frontend/vet-app/.env.prod
     depends_on:
       - backend
     restart: always

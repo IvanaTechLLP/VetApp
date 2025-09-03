@@ -4,6 +4,7 @@ services:
   db:
     image: postgres:15
     container_name: vetapp_db
+    dockerfile: Dockerfile
     environment:
       POSTGRES_USER: vetapp_user
       POSTGRES_PASSWORD: y8pX4s9Kj3bQeT7mRzFh
